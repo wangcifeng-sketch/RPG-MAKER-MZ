@@ -1,0 +1,149 @@
+/*:
+ * @target MZ
+ * @plugindesc [扩展] 在地图上显示敌人名称（基于事件备注 <enemy:id>）
+ * @author CFpanda
+ *
+ * @help
+ * ============================================================================
+ * ■ 功能说明
+ * ============================================================================
+ * 在地图中的敌人事件头顶显示敌人名称。
+ *
+ * 敌人识别规则：
+ * 在事件备注中写：
+ *
+ * <enemy:1>
+ *
+ * 就会读取数据库中 敌人ID 1 的名字，并显示在该事件头顶。
+ *
+ * ============================================================================
+ * ■ 使用方法
+ * ============================================================================
+ * 1. 事件备注写：
+ *    <enemy:1>
+ *
+ * 2. 把本插件放在你的敌人核心插件后面：
+ *    1. CF_Enemy
+ *    2. 本插件 CF_EnemyName
+ *
+ * ============================================================================
+ * ■ 说明
+ * ============================================================================
+ * - 敌人有 HP 且 HP > 0 时显示名字
+ * - 敌人死亡后自动隐藏
+ * - 如果你没有使用 CF_Enemy，也仍然可以通过备注读取数据库敌人名字
+ *
+ * ============================================================================
+ */
+
+(function() {
+
+    //==================================================
+    // 1. 读取敌人名称
+    //==================================================
+    Game_Event.prototype.enemyDatabaseIdForName = function() {
+        if (this._enemyId && this._enemyId > 0) {
+            return this._enemyId;
+        }
+
+        var ev = this.event();
+        if (!ev) return 0;
+
+        var note = ev.note || "";
+        var match = note.match(/<enemy:(\d+)>/i);
+        return match ? Number(match[1]) : 0;
+    };
+
+    Game_Event.prototype.enemyDisplayName = function() {
+        var enemyId = this.enemyDatabaseIdForName();
+        if (!enemyId) return "";
+
+        var enemyData = $dataEnemies[enemyId];
+        if (!enemyData) return "";
+
+        return enemyData.name || "";
+    };
+
+    Game_Event.prototype.shouldShowEnemyName = function() {
+        var enemyId = this.enemyDatabaseIdForName();
+        if (!enemyId) return false;
+
+        // 如果接了你原来的敌人系统，就按血量判断
+        if (this._enemyEntity) {
+            return this._hp > 0;
+        }
+
+        // 没接敌人系统时，只要是 enemy 事件就显示
+        return true;
+    };
+
+    //==================================================
+    // 2. Sprite_Character 更新入口
+    //==================================================
+    var _Sprite_Character_update = Sprite_Character.prototype.update;
+    Sprite_Character.prototype.update = function() {
+        _Sprite_Character_update.call(this);
+        this.updateEnemyNameUI();
+    };
+
+    //==================================================
+    // 3. 创建 / 更新敌人名称显示
+    //==================================================
+    Sprite_Character.prototype.updateEnemyNameUI = function() {
+        var char = this._character;
+        if (!(char instanceof Game_Event)) {
+            if (this._enemyNameSprite) this._enemyNameSprite.visible = false;
+            return;
+        }
+
+        if (!char.shouldShowEnemyName()) {
+            if (this._enemyNameSprite) this._enemyNameSprite.visible = false;
+            return;
+        }
+
+        var name = char.enemyDisplayName();
+        if (!name) {
+            if (this._enemyNameSprite) this._enemyNameSprite.visible = false;
+            return;
+        }
+
+        if (!this._enemyNameSprite) {
+            this.createEnemyNameSprite();
+        }
+
+        this._enemyNameSprite.visible = true;
+
+        if (this._lastEnemyName !== name) {
+            this._lastEnemyName = name;
+            this.refreshEnemyNameSprite(name);
+        }
+    };
+
+    Sprite_Character.prototype.createEnemyNameSprite = function() {
+        this._enemyNameSprite = new Sprite();
+        this._enemyNameSprite.bitmap = new Bitmap(160, 36);
+        this._enemyNameSprite.anchor.x = 0.5;
+        this._enemyNameSprite.anchor.y = 1;
+
+        // 名字放在血条上方一点
+        this._enemyNameSprite.y = -64;
+
+        this.addChild(this._enemyNameSprite);
+        this._lastEnemyName = "";
+    };
+
+    Sprite_Character.prototype.refreshEnemyNameSprite = function(name) {
+        if (!this._enemyNameSprite) return;
+
+        var bitmap = this._enemyNameSprite.bitmap;
+        bitmap.clear();
+
+        bitmap.fontSize = 18;
+        bitmap.textColor = "#ffffff";
+        bitmap.outlineColor = "#000000";
+        bitmap.outlineWidth = 4;
+
+        bitmap.drawText(name, 0, 0, bitmap.width, 32, "center");
+    };
+
+})();
