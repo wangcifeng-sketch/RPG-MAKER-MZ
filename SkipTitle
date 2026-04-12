@@ -1,0 +1,21 @@
+/*:
+ * @target MZ
+ * @plugindesc Skip Title Screen (MZ)
+ *
+ * @help
+ * 跳过标题画面，直接进入游戏
+ */
+
+(() => {
+    "use strict";
+
+    const _Scene_Boot_start = Scene_Boot.prototype.start;
+    Scene_Boot.prototype.start = function() {
+        _Scene_Boot_start.call(this);
+
+        // 只在正常游戏启动时跳过标题
+        if (!DataManager.isBattleTest() && !DataManager.isEventTest()) {
+            SceneManager.goto(Scene_Map);
+        }
+    };
+})();
