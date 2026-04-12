@@ -1,0 +1,209 @@
+/*:
+ * @target MZ
+ * @plugindesc 事件图像偏移系统（支持继承与覆盖 setPosition）
+ * @author CFpanda
+ *
+ * @param playerOffsetX
+ * @text 玩家X偏移
+ * @type number
+ * @default 0
+ * @desc 玩家图像X轴偏移（像素）
+ *
+ * @param playerOffsetY
+ * @text 玩家Y偏移
+ * @type number
+ * @default 24
+ * @desc 玩家图像Y轴偏移（像素）
+ *
+ * @help
+ * =============================================================================
+ * ■ 插件介绍
+ * =============================================================================
+ * 本插件用于调整事件（以及玩家）的显示位置偏移。
+ * 
+ * ● 通过备注 setPosition(x, y) 控制图像偏移
+ * ● 支持多页事件自动继承
+ * ● 仅影响显示位置，不影响碰撞判定
+ * 
+ * =============================================================================
+ * ■ 基本用法
+ * =============================================================================
+ * 在事件“注释”中写：
+ * 
+ * setPosition(0, 24)
+ * 
+ * 即可让事件图像向下偏移 24 像素。
+ * 
+ * =============================================================================
+ * ■ 多页继承规则（核心功能）
+ * =============================================================================
+ * 本插件支持事件页之间的偏移继承：
+ * 
+ * 【规则】
+ * ● 当前页写了 → 使用当前页设置
+ * ● 当前页没写 → 自动继承第一页
+ * 
+ * =============================================================================
+ * ■ 示例
+ * =============================================================================
+ * 【第1页】
+ * setPosition(0, 24)
+ * 
+ * 【第2页（不写）】
+ * → 自动使用 (0, 24)
+ * 
+ * 【第3页】
+ * setPosition(0, 0)
+ * → 覆盖为 (0, 0)
+ * 
+ * =============================================================================
+ * ■ 参数说明
+ * =============================================================================
+ * setPosition(x, y)
+ * 
+ * x：水平偏移（像素）
+ * y：垂直偏移（像素）
+ * 
+ * 示例：
+ * setPosition(10, -16)
+ * 
+ * =============================================================================
+ * ■ 玩家偏移
+ * =============================================================================
+ * 本插件同时对玩家角色应用默认偏移：
+ * 
+ * ● 玩家 Y 轴固定 +24 像素
+ * 
+ * 说明：
+ * ● 用于修正角色脚底位置（常见于 ARPG / 大图角色）
+ * ● 不影响碰撞，仅视觉调整
+ * 
+ * =============================================================================
+ * ■ 工作原理
+ * =============================================================================
+ * 插件会：
+ * 
+ * 1. 读取事件页注释
+ * 2. 解析 setPosition(x, y)
+ * 3. 优先使用当前页
+ * 4. 若无，则读取第一页
+ * 5. 在 Sprite_Character 中叠加偏移
+ * 
+ * =============================================================================
+ * ■ 注意事项
+ * =============================================================================
+ * ● 必须写在“事件注释”中（不是备注）
+ * ● 单位为像素（不是格子）
+ * ● 不影响：
+ *   - 碰撞
+ *   - 路径
+ *   - 触发范围
+ * 
+ * =============================================================================
+ * ■ 适用场景
+ * =============================================================================
+ * ● 大尺寸角色（角色脚底对齐）
+ * ● 武器动画角色
+ * ● ARPG 战斗系统
+ * ● 视觉修正（贴地 / 浮空）
+ * 
+ * =============================================================================
+ * ■ 兼容性
+ * =============================================================================
+ * ● 适用于 RPG Maker MZ
+ * ● 修改 Sprite_Character.updatePosition
+ * ● 与其他位置偏移类插件可能冲突
+ * 
+ * =============================================================================
+ * ■ 版权说明
+ * =============================================================================
+ * 本插件仅限：
+ * ● 学习用途
+ * ● 非商业使用
+ * 
+ * 禁止：
+ * ● 商业使用
+ * ● 未授权传播或修改
+ * 
+ * =============================================================================
+ */
+
+(function() {
+    'use strict';
+
+    const parameters = PluginManager.parameters('CF_SetPosition');
+    const playerOffsetX = Number(parameters['playerOffsetX'] || 0);
+    const playerOffsetY = Number(parameters['playerOffsetY'] || 24);
+
+    function collectComments(list) {
+        if (!list) return '';
+        var result = [];
+        for (var i = 0; i < list.length; i++) {
+            var cmd = list[i];
+            if (cmd.code === 108 || cmd.code === 408) {
+                result.push(String(cmd.parameters[0] || ''));
+            }
+        }
+        return result.join('\n');
+    }
+
+    function parseOffset(text) {
+        if (!text) return null;
+        var match = text.match(/setPosition\s*\(\s*([+-]?\d+)\s*,\s*([+-]?\d+)\s*\)/i);
+        if (!match) return null;
+        return {
+            x: Number(match[1]),
+            y: Number(match[2])
+        };
+    }
+
+    Game_Event.prototype.getFirstPageOffset = function() {
+        var ev = this.event();
+        if (!ev || !ev.pages || ev.pages.length === 0) {
+            return { x: 0, y: 0 };
+        }
+
+        var firstPage = ev.pages[0];
+        var comments = collectComments(firstPage.list);
+        var offset = parseOffset(comments);
+
+        return offset || { x: 0, y: 0 };
+    };
+
+    Game_Event.prototype.getFinalOffset = function() {
+        var page = this.page();
+        if (!page) return { x: 0, y: 0 };
+
+        var comments = collectComments(page.list);
+        var offset = parseOffset(comments);
+
+        if (offset) return offset;
+        return this.getFirstPageOffset();
+    };
+
+    const _Sprite_Character_updatePosition = Sprite_Character.prototype.updatePosition;
+    Sprite_Character.prototype.updatePosition = function() {
+        _Sprite_Character_updatePosition.call(this);
+
+        if (this._character && this._character instanceof Game_Event) {
+            var offset = this._character.getFinalOffset();
+            this.x += offset.x;
+            this.y += offset.y;
+        }
+    };
+
+    //==================================================
+    // 玩家位置偏移（插件参数）
+    //==================================================
+
+    const _Game_Player_screenX = Game_Player.prototype.screenX;
+    Game_Player.prototype.screenX = function() {
+        return _Game_Player_screenX.call(this) + playerOffsetX;
+    };
+
+    const _Game_Player_screenY = Game_Player.prototype.screenY;
+    Game_Player.prototype.screenY = function() {
+        return _Game_Player_screenY.call(this) + playerOffsetY;
+    };
+
+})();
