@@ -1,7 +1,7 @@
 /*:
  * @target MZ
  * @plugindesc 弓箭UI窗口（只在装备弓时显示当前箭图标和数量）
- * @author ChatGPT
+ * @author CFpanda
  *
  * @param WindowX
  * @text UI X坐标
