@@ -288,7 +288,6 @@ For commercial licensing, contact the author separately:
 
 Email: algarloner@gmail.com
 Discord: CFpanda
-Future Expansion
 
 This framework is designed to be expandable.
 
@@ -304,3 +303,12 @@ state / buff combat integration
 
 The goal of this project is to provide a reusable foundation for real-time action combat in RPG Maker MZ.
 
+## License
+
+This project is source-available and provided for personal learning, research, and non-commercial use only.
+
+Commercial use is strictly prohibited without a separate written license from the author.
+
+For commercial licensing:
+- Email: algarloner@gmail.com
+- Discord: CFpanda
