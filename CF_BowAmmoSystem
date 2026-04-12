@@ -1,7 +1,7 @@
 /*:
  * @target MZ
  * @plugindesc 弓箭消耗系统（箭=武器，攻击时消耗并增加攻击力）
- * @author ChatGPT
+ * @author CFpanda
  *
  * @help
  * =========================================================
