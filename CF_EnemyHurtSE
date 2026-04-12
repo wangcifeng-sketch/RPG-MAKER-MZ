@@ -1,0 +1,221 @@
+/*:
+ * @plugindesc [扩展][MZ兼容] 地图敌人掉血播放受伤音效
+ * @author CFpanda
+ *
+ * @help
+ * ============================================================================
+ * 【用途】
+ * ============================================================================
+ * 给带有 <enemy:x> 的地图敌人，在 HP 降低时自动播放受伤音效。
+ *
+ * ============================================================================
+ * 【备注写法】
+ * ============================================================================
+ * 可写在：
+ * 1. 事件备注
+ * 2. 数据库敌人备注
+ *
+ * 写法：
+ * <hurtSe:Ah1,90,100>
+ *
+ * 也支持随机：
+ * <hurtSe:Ah1|Ah2|Ao1,90,100>
+ *
+ * 格式说明：
+ * <hurtSe:音效名,音量,音调,声像>
+ *
+ * 例如：
+ * <hurtSe:MonsterPain1,90,100>
+ * <hurtSe:WolfPain1|WolfPain2,90,105>
+ * 死亡音效<deadSe:EnemyDead1,100,100>
+ * 优先级：
+ * 事件备注 > 数据库敌人备注
+ *
+ * ============================================================================
+ * 【说明】
+ * ============================================================================
+ * 1. 只有 HP 下降时才播放
+ * 2. 不会在回复 HP 时播放
+ * 3. 可设置最小间隔，避免多段伤害时同一帧连续乱叫
+ * ============================================================================
+ */
+
+(function() {
+
+    var CF_HURT_SE_COOLDOWN = 8;
+
+    function cfFindNoteTagValue(note, tagName) {
+        if (!note) return null;
+        var reg = new RegExp("<" + tagName + ":(.*?)>", "i");
+        var match = note.match(reg);
+        return match ? String(match[1]).trim() : null;
+    }
+
+    Game_Event.prototype.cfIsMapEnemy = function() {
+        if (!this.event()) return false;
+
+        if (this._enemyEntity) return true;
+
+        var note = this.event().note || "";
+        return /<enemy:(\d+)>/i.test(note);
+    };
+
+    Game_Event.prototype.cfGetHurtSeText = function() {
+        if (!this.event()) return null;
+
+        var eventNote = this.event().note || "";
+        var value = cfFindNoteTagValue(eventNote, "hurtSe");
+        if (value) return value;
+
+        if (this._enemyEntity && this._enemyEntity.enemy) {
+            var enemyData = this._enemyEntity.enemy();
+            if (enemyData) {
+                var enemyNote = enemyData.note || "";
+                value = cfFindNoteTagValue(enemyNote, "hurtSe");
+                if (value) return value;
+            }
+        }
+
+        return null;
+    };
+
+    Game_Event.prototype.cfMakeHurtSe = function() {
+        var text = this.cfGetHurtSeText();
+        if (!text) return null;
+
+        var arr = text.split(",");
+        var namesText = (arr[0] || "").trim();
+        if (!namesText) return null;
+
+        var names = namesText.split("|").map(function(s) {
+            return String(s || "").trim();
+        }).filter(function(s) {
+            return !!s;
+        });
+
+        if (names.length === 0) return null;
+
+        var name = names[Math.floor(Math.random() * names.length)];
+
+        return {
+            name: name,
+            volume: Number(arr[1] || 90),
+            pitch: Number(arr[2] || 100),
+            pan: Number(arr[3] || 0)
+        };
+    };
+
+    Game_Event.prototype.playEnemyHurtSe = function() {
+        if (!this.cfIsMapEnemy()) return;
+        if (this._hp == null) return;
+
+        if (this._hurtSeCooldown == null) this._hurtSeCooldown = 0;
+        if (this._hurtSeCooldown > 0) return;
+
+        var se = this.cfMakeHurtSe();
+        if (!se) return;
+
+        AudioManager.playSe(se);
+        this._hurtSeCooldown = CF_HURT_SE_COOLDOWN;
+    };
+
+    var _init = Game_Event.prototype.initMembers;
+    Game_Event.prototype.initMembers = function() {
+        _init.call(this);
+        this._cfLastTrackedHp = null;
+        this._hurtSeCooldown = 0;
+    };
+
+    var _update = Game_Event.prototype.update;
+    Game_Event.prototype.update = function() {
+        _update.call(this);
+
+        if (!this.cfIsMapEnemy()) return;
+        if (this._hp == null) return;
+
+        if (this._hurtSeCooldown > 0) {
+            this._hurtSeCooldown--;
+        }
+
+        var currentHp = Math.max(0, Number(this._hp || 0));
+
+        if (this._cfLastTrackedHp == null) {
+            this._cfLastTrackedHp = currentHp;
+            return;
+        }
+
+        if (currentHp < this._cfLastTrackedHp) {
+            if (currentHp <= 0 && this._cfLastTrackedHp > 0) {
+                this.playEnemyDeadSe();
+            } else {
+                this.playEnemyHurtSe();
+            }
+        }
+
+        this._cfLastTrackedHp = currentHp;
+    };
+
+    // ===== 安全兼容（MZ可能没有这个函数）
+    if (Game_Event.prototype.respawnEnemy) {
+        var _respawn = Game_Event.prototype.respawnEnemy;
+        Game_Event.prototype.respawnEnemy = function() {
+            _respawn.call(this);
+            this._cfLastTrackedHp = this._hp != null ? Math.max(0, Number(this._hp || 0)) : null;
+            this._hurtSeCooldown = 0;
+        };
+    }
+
+    // ===== 死亡音效 =====
+    Game_Event.prototype.cfGetDeadSeText = function() {
+        if (!this.event()) return null;
+
+        var eventNote = this.event().note || "";
+        var value = cfFindNoteTagValue(eventNote, "deadSe");
+        if (value) return value;
+
+        if (this._enemyEntity && this._enemyEntity.enemy) {
+            var enemyData = this._enemyEntity.enemy();
+            if (enemyData) {
+                var enemyNote = enemyData.note || "";
+                value = cfFindNoteTagValue(enemyNote, "deadSe");
+                if (value) return value;
+            }
+        }
+
+        return null;
+    };
+
+    Game_Event.prototype.cfMakeDeadSe = function() {
+        var text = this.cfGetDeadSeText();
+        if (!text) return null;
+
+        var arr = text.split(",");
+        var namesText = (arr[0] || "").trim();
+        if (!namesText) return null;
+
+        var names = namesText.split("|").map(function(s) {
+            return String(s || "").trim();
+        }).filter(function(s) {
+            return !!s;
+        });
+
+        if (names.length === 0) return null;
+
+        var name = names[Math.floor(Math.random() * names.length)];
+
+        return {
+            name: name,
+            volume: Number(arr[1] || 90),
+            pitch: Number(arr[2] || 100),
+            pan: Number(arr[3] || 0)
+        };
+    };
+
+    Game_Event.prototype.playEnemyDeadSe = function() {
+        var se = this.cfMakeDeadSe();
+        if (!se) return;
+
+        AudioManager.playSe(se);
+    };
+
+})();
