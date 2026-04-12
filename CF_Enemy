@@ -1,0 +1,1116 @@
+/*:
+ * @target MZ
+ * @plugindesc [核心] 地图敌人系统（属性 / AI攻击 / 血条 / 飘字 / 技能驱动）
+ * @author CFpanda
+ *
+ * @command EnemyRespawn
+ * @text 敌人重生
+ * @desc 当前事件敌人重生
+ *
+ * @command EnemyAttackPlayer
+ * @text 敌人攻击玩家
+ * @desc 当前事件攻击玩家
+ *
+ * @help
+ * ============================================================================
+ * ■ 插件定位
+ * ============================================================================
+ * 本插件是【地图即时战斗系统】的敌人核心模块。
+ *
+ * 作用：
+ * ✔ 将事件转为“敌人单位”
+ * ✔ 绑定数据库敌人属性
+ * ✔ 控制敌人攻击与技能选择
+ * ✔ 提供血条、飘字、技能名显示
+ * ✔ 驱动敌人AI攻击流程
+ *
+ * ============================================================================
+ * ■ 功能概要
+ * ============================================================================
+ * 1. 事件敌人化（<enemy:id>）
+ * 2. 敌人属性同步数据库
+ * 3. 自动选择技能（rating机制）
+ * 4. 攻击冷却系统
+ * 5. 技能/普通攻击对玩家造成伤害
+ * 6. 支持攻击体（AttackObject）联动
+ * 7. 敌人血条显示
+ * 8. 伤害飘字（MISS / 数字 / 暴击）
+ * 9. 技能名提示
+ * 10. 敌人HP/MP自动回复
+ *
+ * ============================================================================
+ * ■ 敌人设置（核心）
+ * ============================================================================
+ * 在事件备注中写：
+ *
+ * <enemy:1>
+ *
+ * → 该事件将绑定数据库中的敌人ID 1
+ *
+ * ============================================================================
+ * ■ 战斗机制
+ * ============================================================================
+ * 敌人攻击流程：
+ *
+ * 敌人
+ *   ↓
+ * 选择数据库行动（rating）
+ *   ↓
+ * 判断距离（range）
+ *   ↓
+ * 执行技能
+ *
+ * 分两种：
+ *
+ * 【有攻击体】
+ * → 生成攻击体（延迟发射）
+ *
+ * 【无攻击体】
+ * → 直接结算伤害
+ *
+ * ============================================================================
+ * ■ 技能机制
+ * ============================================================================
+ * 敌人技能来自：
+ * 数据库 → 敌人 → Actions
+ *
+ * 自动支持：
+ * ✔ 命中率（successRate）
+ * ✔ 闪避（eva）
+ * ✔ 暴击（cri）
+ * ✔ 伤害公式（damage formula）
+ * ✔ 波动（variance）
+ *
+ * ============================================================================
+ * ■ 距离判定
+ * ============================================================================
+ * 支持技能备注：
+ * <range:3>
+ *
+ * → 敌人只会在直线范围内释放技能
+ *
+ * ============================================================================
+ * ■ 攻击体联动
+ * ============================================================================
+ * 如果技能包含：
+ *
+ * <attackObject:xxx>
+ *
+ * → 不直接造成伤害
+ * → 改为生成攻击体（由 AttackObject 插件处理）
+ *
+ * ============================================================================
+ * ■ UI显示
+ * ============================================================================
+ * 自动提供：
+ *
+ * ✔ 敌人血条
+ * ✔ 伤害飘字
+ * ✔ MISS提示
+ * ✔ 技能名称显示
+ *
+ * ============================================================================
+ * ■ 攻击动作（立绘切换）
+ * ============================================================================
+ * 行走图规则：
+ * 正常图：Enemy1
+ * 攻击图：Enemy1_attack
+ *
+ * → 攻击时自动切换动画帧
+ *
+ * ============================================================================
+ * ■ 插件指令
+ * ============================================================================
+ * ◆ EnemyAttackPlayer
+ * 当前事件攻击玩家
+ *
+ * ◆ EnemyRespawn
+ * 当前事件重生敌人
+ *
+ * ============================================================================
+ * ■ 脚本调用
+ * ============================================================================
+ * ◆ 在移动路线中：
+ *
+ * this.enemyAttackPlayer();
+ * 或：
+ * EnemyAttackPlayer(eventId);
+ *
+ * ============================================================================
+ * ■ 注意事项
+ * ============================================================================
+ * - 敌人必须绑定 <enemy:id>
+ * - 玩家默认使用“队长”作为战斗对象
+ * - 无攻击体技能会立即结算伤害
+ *
+ * ============================================================================
+ * ■ 依赖关系
+ * ============================================================================
+ * 推荐搭配：
+ * ✔ CF_Attack（玩家输入）
+ * ✔ CF_AttackObject（攻击体系统）
+ *
+ * 插件顺序：
+ * 1. CF_Attack
+ * 2. CF_AttackObject
+ * 3. 本插件（Enemy）
+ *
+ * ============================================================================
+ * ■ 扩展建议
+ * ============================================================================
+ * 可扩展：
+ *
+ * ✔ 敌人AI（巡逻 / 追击）
+ * ✔ 仇恨系统
+ * ✔ 技能释放前摇 / 后摇
+ * ✔ 多段技能
+ *
+ * ============================================================================
+ * ■ 作者说明
+ * ============================================================================
+ * 本插件为 CFpanda 地图ARPG系统核心模块
+ *
+ * ============================================================================
+ */
+
+(function() {
+
+    //==================================================
+    // 1. 事件敌人属性初始化
+    //==================================================
+    var _Game_Event_setupPage = Game_Event.prototype.setupPage;
+    Game_Event.prototype.setupPage = function() {
+        _Game_Event_setupPage.call(this);
+        this.initEnemyEntity();
+    };
+
+Game_Event.prototype.initEnemyEntity = function() {
+    if (!this.event()) return;
+
+    var note = this.event().note || "";
+    var enemyMatch = note.match(/<enemy:(\d+)>/i);
+
+    if (enemyMatch) {
+        var enemyId = Number(enemyMatch[1]);
+
+        // 只有第一次，或者 enemyId 变化时，才重新创建敌人实体
+        if (!this._enemyEntity || this._enemyId !== enemyId) {
+            this._enemyId = enemyId;
+            this._enemyEntity = new Game_Enemy(enemyId, 0, 0);
+
+            // 只在第一次创建时初始化 HP
+            if (this._hp == null) {
+                this._hp = this._enemyEntity.mhp;
+            }
+        } else {
+            // 如果敌人实体已经存在，就不要重置 HP / MP
+            // 只保证 _hp 至少有值
+            if (this._hp == null) {
+                this._hp = this._enemyEntity.hp;
+            }
+        }
+    } else {
+        this._enemyId = 0;
+        this._enemyEntity = null;
+        this._hp = 0;
+    }
+
+    if (this._attackCooldown == null) this._attackCooldown = 0;
+};
+    //==================================================
+    // 2. 敌人属性映射
+    //==================================================
+    Object.defineProperty(Game_Event.prototype, "atk", {
+        get: function() { return this._enemyEntity ? this._enemyEntity.atk : 0; },
+        configurable: true
+    });
+
+    Object.defineProperty(Game_Event.prototype, "def", {
+        get: function() { return this._enemyEntity ? this._enemyEntity.def : 0; },
+        configurable: true
+    });
+
+    Object.defineProperty(Game_Event.prototype, "mat", {
+        get: function() { return this._enemyEntity ? this._enemyEntity.mat : 0; },
+        configurable: true
+    });
+
+    Object.defineProperty(Game_Event.prototype, "mdf", {
+        get: function() { return this._enemyEntity ? this._enemyEntity.mdf : 0; },
+        configurable: true
+    });
+
+    Object.defineProperty(Game_Event.prototype, "agi", {
+        get: function() { return this._enemyEntity ? this._enemyEntity.agi : 0; },
+        configurable: true
+    });
+
+    Object.defineProperty(Game_Event.prototype, "luk", {
+        get: function() { return this._enemyEntity ? this._enemyEntity.luk : 0; },
+        configurable: true
+    });
+
+    Object.defineProperty(Game_Event.prototype, "hit", {
+        get: function() { return this._enemyEntity ? this._enemyEntity.hit : 0; },
+        configurable: true
+    });
+
+    Object.defineProperty(Game_Event.prototype, "eva", {
+        get: function() { return this._enemyEntity ? this._enemyEntity.eva : 0; },
+        configurable: true
+    });
+
+    Object.defineProperty(Game_Event.prototype, "cri", {
+        get: function() { return this._enemyEntity ? this._enemyEntity.cri : 0; },
+        configurable: true
+    });
+
+    //==================================================
+    // 3. 飘字系统（MISS / 数字）
+    //==================================================
+Game_Character.prototype.showDamageText = function(text, color) {
+    if (!this._damageTexts) this._damageTexts = [];
+
+    this._damageTexts.push({
+        text: String(text || ""),
+        color: color || "#ffffff",
+        duration: 60,
+        vy: -1.2,
+        offsetY: this._damageTexts.length * 16   // 后来的字稍微错开
+    });
+};
+
+    Game_Character.prototype.showSkillNameText = function(text, color) {
+        this._skillNameText = {
+            text: String(text || ""),
+            color: color || "#66ccff",
+            duration: 45,
+            vy: -0.8
+        };
+    };
+
+    //==================================================
+    // 4. Sprite_Character：血条 + 飘字
+    //==================================================
+    var _Sprite_Character_update = Sprite_Character.prototype.update;
+    Sprite_Character.prototype.update = function() {
+        _Sprite_Character_update.call(this);
+        this.updateEnemyUI();
+        this.updateDamageText();
+        this.updateSkillNameText();
+    };
+
+Sprite_Character.prototype.updateSkillNameText = function() {
+    var char = this._character;
+    if (!char || !char._skillNameText) return;
+
+    if (!this._skillNameSprite) {
+        this.createSkillNameSprite();
+    }
+
+    var data = char._skillNameText;
+    var sprite = this._skillNameSprite;
+
+    if (!sprite._initialized) {
+        this.refreshSkillNameText(data.text, data.color);
+        sprite.visible = true;
+        sprite.opacity = 255;
+        sprite.y = -52;   // 比血条更高一点
+        sprite._initialized = true;
+    }
+
+    sprite.y += data.vy;
+    sprite.opacity -= 5;
+    data.duration--;
+
+    if (data.duration <= 0) {
+        sprite.visible = false;
+        sprite.opacity = 255;
+        sprite.y = -52;
+        sprite._initialized = false;
+        char._skillNameText = null;
+    }
+};
+
+Sprite_Character.prototype.createSkillNameSprite = function() {
+    this._skillNameSprite = new Sprite();
+    this._skillNameSprite.bitmap = new Bitmap(160, 36);
+    this._skillNameSprite.anchor.x = 0.5;
+    this._skillNameSprite.anchor.y = 1;
+    this._skillNameSprite.y = -52;
+    this._skillNameSprite.visible = false;
+    this._skillNameSprite._initialized = false;
+    this.addChild(this._skillNameSprite);
+};
+
+Sprite_Character.prototype.refreshSkillNameText = function(text, color) {
+    var bitmap = this._skillNameSprite.bitmap;
+    bitmap.clear();
+
+    bitmap.fontSize = 18;
+    bitmap.textColor = color || "#66ccff";
+    bitmap.outlineColor = "#000000";
+    bitmap.outlineWidth = 4;
+
+    bitmap.drawText(text, 0, 0, bitmap.width, 32, "center");
+};
+    //--------------------------
+    // 敌人血条
+    //--------------------------
+    Sprite_Character.prototype.updateEnemyUI = function() {
+        var char = this._character;
+
+        if (char && char._enemyEntity && char._hp > 0) {
+            if (!this._enemyBarSprite) {
+                this.createEnemyBar();
+            }
+            this._enemyBarSprite.visible = true;
+            this.refreshEnemyBar();
+        } else {
+            if (this._enemyBarSprite) {
+                this._enemyBarSprite.visible = false;
+            }
+        }
+    };
+
+    Sprite_Character.prototype.createEnemyBar = function() {
+        this._enemyBarSprite = new Sprite();
+        this._enemyBarSprite.bitmap = new Bitmap(100, 40);
+        this._enemyBarSprite.anchor.x = 0.5;
+        this._enemyBarSprite.anchor.y = 1;
+        this._enemyBarSprite.y = -36;
+        this.addChild(this._enemyBarSprite);
+        this._lastHp = -1;
+    };
+
+Sprite_Character.prototype.refreshEnemyBar = function() {
+    var char = this._character;
+    if (!char || !char._enemyEntity) return;
+
+    var hp = Math.max(0, Math.floor(char._hp));
+    var mhp = Math.max(1, char._enemyEntity.mhp);
+
+    var mp = Math.max(0, Math.floor(char._enemyEntity.mp));
+    var mmp = Math.max(1, char._enemyEntity.mmp);
+
+    // HP 和 MP 都没变化时不重绘
+    if (this._lastHp === hp && this._lastMp === mp) return;
+    this._lastHp = hp;
+    this._lastMp = mp;
+
+    var hpRate = hp / mhp;
+    var mpRate = mp / mmp;
+
+    var bitmap = this._enemyBarSprite.bitmap;
+    bitmap.clear();
+
+    // 条宽高
+    var bw = 60;
+    var bh = 7;
+    var bx = 22;
+
+    // HP 条位置
+    var hpBy = 0;
+    // MP 条位置（在 HP 下方）
+    var mpBy = 27;
+
+    // HP 背景
+    bitmap.fillRect(bx, hpBy, bw, bh, "rgba(0,0,0,0.8)");
+    // HP 红条
+    bitmap.fillRect(bx + 1, hpBy + 1, Math.floor((bw - 2) * hpRate), bh - 2, "#ff4444");
+
+    // MP 背景
+    //bitmap.fillRect(bx, mpBy, bw, bh, "rgba(0,0,0,0.8)");
+    // MP 蓝条
+    //bitmap.fillRect(bx + 1, mpBy + 1, Math.floor((bw - 2) * mpRate), bh - 2, "#4488ff");
+
+    // 文字
+    bitmap.fontSize = 10;
+    bitmap.textColor = "#ffffff";
+    bitmap.outlineColor = "#000000";
+    bitmap.outlineWidth = 3;
+
+    //血条数字位置
+    bitmap.drawText(hp + "/" + mhp, 12, -12, bitmap.width, 32, "center");
+    //bitmap.drawText(mp + "/" + mmp, 12, 12, bitmap.width, 32, "center");
+};
+
+    //--------------------------
+    // 飘字显示
+    //--------------------------
+Sprite_Character.prototype.updateDamageText = function() {
+    var char = this._character;
+    if (!char) return;
+
+    if (!char._damageTexts) char._damageTexts = [];
+    if (!this._damageSprites) this._damageSprites = [];
+
+    // 有新的伤害文字，就创建新 sprite
+    while (this._damageSprites.length < char._damageTexts.length) {
+        this.createDamageSprite(char._damageTexts[this._damageSprites.length]);
+    }
+
+    // 更新所有飘字
+    for (var i = this._damageTextsLengthSafe(char) - 1; i >= 0; i--) {
+        var data = char._damageTexts[i];
+        var sprite = this._damageSprites[i];
+        if (!data || !sprite) continue;
+
+        if (!sprite._initialized) {
+            this.refreshDamageText(sprite, data.text, data.color);
+            sprite.visible = true;
+            sprite.opacity = 255;
+            sprite.y = -24 - (data.offsetY || 0);
+            sprite._initialized = true;
+        }
+
+        sprite.y += data.vy;
+        sprite.opacity -= 4;
+        data.duration--;
+
+        if (data.duration <= 0) {
+            this.removeChild(sprite);
+            this._damageSprites.splice(i, 1);
+            char._damageTexts.splice(i, 1);
+        }
+    }
+};
+
+Sprite_Character.prototype._damageTextsLengthSafe = function(char) {
+    return char && char._damageTexts ? char._damageTexts.length : 0;
+};
+
+Sprite_Character.prototype.createDamageSprite = function(data) {
+    var sprite = new Sprite();
+    sprite.bitmap = new Bitmap(120, 40);
+    sprite.anchor.x = 0.5;
+    sprite.anchor.y = 1;
+    sprite.y = -24 - ((data && data.offsetY) || 0);
+    sprite.visible = false;
+    sprite._initialized = false;
+    this.addChild(sprite);
+    this._damageSprites.push(sprite);
+};
+
+Sprite_Character.prototype.refreshDamageText = function(sprite, text, color) {
+    var bitmap = sprite.bitmap;
+    bitmap.clear();
+
+    if (color === "#ffff66") {
+        bitmap.fontSize = 28; // 暴击
+    } else {
+        bitmap.fontSize = 20; // 普通
+    }
+
+    bitmap.textColor = color || "#ffffff";
+    bitmap.outlineColor = "#000000";
+    bitmap.outlineWidth = 4;
+
+    bitmap.drawText(text, 0, 0, bitmap.width, 32, "center");
+};
+
+    //==================================================
+    // 5. 敌人更新：攻击冷却
+    //==================================================
+    var _Game_Event_update = Game_Event.prototype.update;
+    Game_Event.prototype.update = function() {
+        _Game_Event_update.call(this);
+        this.updateAttackCooldown();
+        this.updateRegen();
+    };
+
+    Game_Event.prototype.updateAttackCooldown = function() {
+        if (this._attackCooldown == null) this._attackCooldown = 0;
+        if (this._attackCooldown > 0) this._attackCooldown--;
+    };
+
+    //==================================================
+    // 6. 玩家战斗对象（单角色 = 队长）
+    //==================================================
+    Game_Event.prototype.playerBattler = function() {
+        return $gameParty.leader();
+    };
+
+    //==================================================
+    // 7. 普通攻击伤害计算
+    //==================================================
+    Game_Event.prototype.calcAttackPlayerDamage = function() {
+        if (!this._enemyEntity) return 0;
+
+        var actor = this.playerBattler();
+        if (!actor) return 0;
+
+        var enemy = this._enemyEntity;
+
+        var hitRate = enemy.hit || 0.95;
+        var evaRate = actor.eva || 0.05;
+        var finalHit = Math.max(0.05, hitRate - evaRate);
+
+        if (Math.random() > finalHit) {
+            return 0;
+        }
+
+        var baseDamage = enemy.atk - actor.def * 0.5;
+        baseDamage = Math.max(1, Math.floor(baseDamage));
+
+        if (Math.random() < (enemy.cri || 0)) {
+            baseDamage = Math.floor(baseDamage * 1.5);
+        }
+
+        var variance = 0.85 + Math.random() * 0.30;
+        var damage = Math.floor(baseDamage * variance);
+
+        return Math.max(1, damage);
+    };
+
+    //==================================================
+    // 9. 从数据库敌人行动中取可用技能
+    //==================================================
+Game_Event.prototype.selectEnemyActionByRating = function() {
+    if (!this._enemyEntity || !this._enemyEntity.enemy()) return null;
+
+    var enemyData = this._enemyEntity.enemy();
+    var actions = enemyData.actions || [];
+    var validActions = [];
+
+    for (var i = 0; i < actions.length; i++) {
+        var action = actions[i];
+        if (!action) continue;
+        if (!action.skillId || action.skillId <= 0) continue;
+
+        var skill = $dataSkills[action.skillId];
+        if (!skill) continue;
+
+        // 数据库里的行动条件必须成立
+        if (!this._enemyEntity.isActionValid(action)) continue;
+
+        // MP / TP 消耗必须付得起
+        if (!this._enemyEntity.canPaySkillCost(skill)) continue;
+
+        validActions.push(action);
+    }
+
+    if (validActions.length === 0) return null;
+
+    // 模拟 RPG Maker 默认敌人行动 rating 逻辑
+    var maxRating = 0;
+    for (var i = 0; i < validActions.length; i++) {
+        if (validActions[i].rating > maxRating) {
+            maxRating = validActions[i].rating;
+        }
+    }
+
+    var ratingZero = maxRating - 3;
+    var filtered = [];
+    var sum = 0;
+
+    for (var i = 0; i < validActions.length; i++) {
+        var action = validActions[i];
+        if (action.rating > ratingZero) {
+            filtered.push(action);
+            sum += action.rating - ratingZero;
+        }
+    }
+
+    if (filtered.length === 0 || sum <= 0) return null;
+
+    var value = Math.random() * sum;
+
+    for (var i = 0; i < filtered.length; i++) {
+        var action = filtered[i];
+        value -= (action.rating - ratingZero);
+        if (value < 0) {
+            return action;
+        }
+    }
+
+    return filtered[0];
+};
+
+    //==================================================
+    // 10. 技能伤害计算（按数据库技能公式）
+    //==================================================
+    Game_Event.prototype.calcSkillDamageToPlayer = function(skill) {
+        if (!this._enemyEntity || !skill) return null;
+
+        var actor = this.playerBattler();
+        if (!actor) return null;
+
+        var enemy = this._enemyEntity;
+
+        var successRate = (skill.successRate != null ? skill.successRate : 100) / 100;
+        var hitChance = successRate * (enemy.hit || 0.95);
+        var evaRate = actor.eva || 0.05;
+        var finalHit = Math.max(0.05, hitChance - evaRate);
+
+        if (Math.random() > finalHit) {
+            return {
+                missed: true,
+                damage: 0,
+                critical: false
+            };
+        }
+
+        var damage = 0;
+        var critical = false;
+
+        if (skill.damage && skill.damage.type > 0) {
+            var a = enemy;
+            var b = actor;
+            var v = $gameVariables._data;
+
+            try {
+                damage = Math.floor(eval(skill.damage.formula || "0"));
+            } catch (e) {
+                damage = 0;
+            }
+
+            // 只对 HP伤害 允许暴击
+            if (skill.damage.type === 1) {
+                critical = Math.random() < (enemy.cri || 0);
+                if (critical) {
+                    damage = Math.floor(damage * 1.5);
+                }
+            }
+
+            var variance = skill.damage.variance || 0;
+            if (variance > 0) {
+                var amp = Math.floor(Math.abs(damage) * variance / 100);
+                damage += Math.floor(Math.random() * (amp * 2 + 1)) - amp;
+            }
+
+            // 1 = HP伤害
+            // 3 = HP恢复
+            if (skill.damage.type === 1) {
+                damage = Math.max(0, damage);
+            } else if (skill.damage.type === 3) {
+                damage = -Math.max(0, damage);
+            } else {
+                damage = 0;
+            }
+        }
+
+        return {
+            missed: false,
+            damage: damage,
+            critical: critical
+        };
+    };
+
+    //==================================================
+    // 11. 敌人攻击玩家（技能）
+    //==================================================
+Game_Event.prototype.attackPlayer = function() {
+    if (!this._enemyEntity) return false;
+
+    var actor = this.playerBattler();
+    if (!actor) return false;
+
+    if (this._attackCooldown == null) this._attackCooldown = 0;
+    if (this._attackCooldown > 0) return false;
+
+    // 直接按数据库行动权重选
+    var action = this.selectEnemyActionByRating();
+    if (!action) return false;
+
+    var skillId = action.skillId;
+    var skill = $dataSkills[skillId];
+    if (!skill) return false;
+
+    if (!this.canUseEnemySkillByRange(skill)) return false;
+
+    return this.useEnemySkillOnPlayer(skillId);
+};
+    //==================================================
+    // 12. 敌人攻击玩家（普通攻击 / 技能）
+    //==================================================
+Game_Event.prototype.useEnemySkillOnPlayer = function(skillId) {
+    if (!this._enemyEntity) return false;
+
+    var actor = this.playerBattler();
+    if (!actor) return false;
+
+    var skill = $dataSkills[skillId];
+    if (!skill) return false;
+
+this.startEnemyAttackMotion(skillId > 1 ? 50 : 30);
+
+if (!this._enemyEntity.canPaySkillCost(skill)) {
+    return false;
+}
+
+if (skillId > 1) {
+    this.showSkillNameText(skill.name, "#66ccff");
+}
+
+this._enemyEntity.paySkillCost(skill);
+
+    var hasAttackObject = false;
+    if (this.skillAttackObjectType) {
+        hasAttackObject = !!this.skillAttackObjectType(skill);
+    }
+
+    // 有攻击体备注 → 生成攻击体，不立即结算伤害
+if (hasAttackObject && this.queueEnemyAttackObject) {
+    var motionTime = (skillId > 1 ? 50 : 30);
+
+    // 在动作中段发射，观感会比较像“挥出去”时出刀光
+    var delay = Math.floor(motionTime * 0.45);
+
+    this.queueEnemyAttackObject(skill, delay);
+    this._attackCooldown = (skillId > 1 ? 90 : 60);
+    return true;
+}
+
+    // 没有攻击体备注 → 继续走原来的直接结算
+    if (skill.animationId && skill.animationId > 0) {
+        $gamePlayer.requestAnimation(skill.animationId);
+    }
+
+    var result = this.calcSkillDamageToPlayer(skill);
+    if (!result) return false;
+
+    if (result.missed) {
+        SoundManager.playMiss();
+        $gamePlayer.showDamageText("MISS", "#aaaaaa");
+        this._attackCooldown = (skillId > 1 ? 90 : 60);
+        return false;
+    }
+
+if (result.damage > 0) {
+    actor.gainHp(-result.damage);
+    $gamePlayer.showDamageText(
+        String(result.damage),
+        result.critical ? "#ffff66" : (skillId > 1 ? "#66ccff" : "#ff6666")
+    );
+} else if (result.damage < 0) {
+    actor.gainHp(-result.damage);
+    $gamePlayer.showDamageText(String(-result.damage), "#66ff99");
+} else {
+    $gamePlayer.showDamageText("0", "#ffffff");
+}
+
+    if (actor.isDead()) {
+        $gameMessage.add(actor.name() + " 被击倒了！");
+        SceneManager.goto(Scene_Gameover);
+    }
+
+    this._attackCooldown = (skillId > 1 ? 90 : 60);
+    return true;
+};
+
+//==================================================
+// 敌人重生
+//==================================================
+Game_Event.prototype.respawnEnemy = function() {
+    if (!this._enemyId) return;
+
+    var enemyData = $dataEnemies[this._enemyId];
+    if (!enemyData) return;
+
+    var battler = new Game_Enemy(this._enemyId, 0, 0);
+
+    this._enemyEntity = battler;
+    this._hp = battler.mhp;
+    this._mp = battler.mmp;
+
+    if (this.refreshEnemyBar) {
+        this.refreshEnemyBar();
+    }
+};
+
+Game_Event.prototype.updateRegen = function() {
+    if (!this._enemyEntity || this._hp <= 0) return;
+
+    if (this._regenTick == null) this._regenTick = 0;
+
+    this._regenTick++;
+
+    // 每60帧（1秒）
+    if (this._regenTick >= 120) {
+        this._regenTick = 0;
+
+        var enemy = this._enemyEntity;
+
+        // ===== HP恢复 =====
+        var mhp = enemy.mhp;
+        var hpRegen = Math.max(1, Math.floor(mhp * 0.0002)); // 0.1%
+
+        this._hp = Math.min(this._hp + hpRegen, mhp);
+
+        // ===== MP恢复 =====
+        var mmp = enemy.mmp;
+        var mpRegen = Math.max(1, Math.floor(mmp * 0.00015));
+
+        enemy.gainMp(mpRegen);
+    }
+};
+    //==================================================
+    // 13. 插件指令
+    //==================================================
+
+var _Game_Interpreter_pluginCommand = Game_Interpreter.prototype.pluginCommand;
+Game_Interpreter.prototype.pluginCommand = function(command, args) {
+    _Game_Interpreter_pluginCommand.call(this, command, args);
+
+    if (command === "EnemyAttackPlayer") {
+        var event = $gameMap.event(this._eventId);
+        if (event) {
+            event.attackPlayer();
+        }
+    } else if (command === "EnemyRespawn") {
+        var event = $gameMap.event(this._eventId);
+        if (event) {
+            event.respawnEnemy();
+        }
+    }
+};
+
+//==================================================
+// 14. 给自定义移动路线用的调用接口
+//==================================================
+Game_Character.prototype.enemyAttackPlayer = function() {
+    if (this instanceof Game_Event) {
+        this.attackPlayer();
+    }
+};
+
+window.EnemyAttackPlayer = function(eventId) {
+    var event = $gameMap.event(eventId);
+    if (event) {
+        event.attackPlayer();
+    }
+};
+
+//==================================================
+// 15. 敌人攻击动作图
+// 规则：
+// 正常图：$Enemy1
+// 攻击图：$Enemy1_attack
+//==================================================
+
+// 记录事件原始行走图名
+var _Game_Event_initMembers_CFEnemyAttackMotion = Game_Event.prototype.initMembers;
+Game_Event.prototype.initMembers = function() {
+    _Game_Event_initMembers_CFEnemyAttackMotion.call(this);
+    this._enemyNormalCharacterName = "";
+    this._enemyAttackCharacterName = "";
+    this._enemyAttackMotionWait = 0;
+    this._enemyMotionPlaying = false;
+
+    this._pendingAttackObjectSkill = null;
+    this._pendingAttackObjectDelay = 0;
+};
+
+// 每次刷新页面时，自动读取当前敌人的图名
+var _Game_Event_setupPage_CFEnemyAttackMotion = Game_Event.prototype.setupPage;
+Game_Event.prototype.setupPage = function() {
+    _Game_Event_setupPage_CFEnemyAttackMotion.call(this);
+
+    // 当前事件页使用的行走图，视为“正常图”
+    this._enemyNormalCharacterName = this.characterName ? this.characterName() : "";
+    this._enemyAttackCharacterName = this._enemyNormalCharacterName
+        ? this._enemyNormalCharacterName + "_attack"
+        : "";
+};
+
+// 播放敌人攻击动作
+Game_Event.prototype.startEnemyAttackMotion = function(wait) {
+    wait = wait || 18;
+
+    if (!this._enemyNormalCharacterName) {
+        this._enemyNormalCharacterName = this.characterName ? this.characterName() : "";
+    }
+
+    if (!this._enemyNormalCharacterName) return;
+
+    this._enemyAttackCharacterName = this._enemyNormalCharacterName + "_attack";
+
+    // 切换到攻击图
+    this.setImage(this._enemyAttackCharacterName, this.characterIndex());
+
+    // ⭐ 关键：强制从左边第1帧开始
+    this._pattern = 0;
+
+    this._enemyAttackMotionWait = wait;
+    this._enemyAttackMotionTotal = wait;
+    this._enemyMotionPlaying = true;
+};
+
+Game_Event.prototype.updateEnemyAttackMotionPattern = function() {
+    if (!this._enemyMotionPlaying) return;
+
+    var total = Math.max(1, this._enemyAttackMotionTotal || 1);
+    var left = Math.max(0, this._enemyAttackMotionWait || 0);
+    var passed = total - left;
+
+    // 1 -> 2 -> 3 （左到右）
+    if (passed < total / 3) {
+        this._pattern = 0;   // 第1帧（左）
+    } else if (passed < total * 2 / 3) {
+        this._pattern = 1;   // 第2帧（中）
+    } else {
+        this._pattern = 2;   // 第3帧（右）
+    }
+};
+
+// 结束敌人攻击动作
+Game_Event.prototype.endEnemyAttackMotion = function() {
+    if (!this._enemyNormalCharacterName) return;
+
+    this.setImage(this._enemyNormalCharacterName, this.characterIndex());
+    this._enemyAttackMotionWait = 0;
+    this._enemyAttackMotionTotal = 0;
+    this._enemyMotionPlaying = false;
+
+    // 恢复站立帧
+    this._pattern = 1;
+};
+
+// 更新攻击动作计时
+var _Game_Event_update_CFEnemyAttackMotion = Game_Event.prototype.update;
+Game_Event.prototype.update = function() {
+    _Game_Event_update_CFEnemyAttackMotion.call(this);
+
+    if (this._enemyMotionPlaying) {
+        this.updateEnemyAttackMotionPattern();
+
+        if (this._enemyAttackMotionWait > 0) {
+            this._enemyAttackMotionWait--;
+        }
+
+        if (this._enemyAttackMotionWait <= 0) {
+            this.endEnemyAttackMotion();
+        }
+    }
+
+    this.updateQueuedAttackObject();
+};
+
+Game_Event.prototype.isPlayerInAttackRange = function() {
+    var x2 = $gameMap.roundXWithDirection(this.x, this.direction());
+    var y2 = $gameMap.roundYWithDirection(this.y, this.direction());
+    return $gamePlayer.x === x2 && $gamePlayer.y === y2;
+};
+
+Game_Event.prototype.isPlayerCollidedForAttack = function() {
+    return this.isPlayerInAttackRange();
+};
+
+Game_Event.prototype.enemySkillRange = function(skill) {
+    if (!skill) return 1;
+
+    var note = skill.note || "";
+    var match = note.match(/<range:(\d+)>/i);
+
+    if (match) {
+        return Math.max(1, Number(match[1]));
+    }
+
+    // 没写的话默认 1 格
+    return 1;
+};
+
+Game_Event.prototype.canUseEnemySkillByRange = function(skill) {
+    var range = this.enemySkillRange(skill);
+    return this.isPlayerInLineRange(range);
+};
+
+Game_Event.prototype.isPlayerInLineRange = function(range) {
+    range = Math.max(1, range || 1);
+
+    for (var i = 1; i <= range; i++) {
+        var x = this.x;
+        var y = this.y;
+
+        if (this.direction() === 2) y += i;
+        else if (this.direction() === 4) x -= i;
+        else if (this.direction() === 6) x += i;
+        else if (this.direction() === 8) y -= i;
+
+        if ($gamePlayer.x === x && $gamePlayer.y === y) {
+            return true;
+        }
+    }
+
+    return false;
+};
+
+Game_Event.prototype.enemySkillRange = function(skill) {
+    if (!skill) return 1;
+
+    var note = skill.note || "";
+    var match = note.match(/<range:(\d+)>/i);
+
+    if (match) {
+        return Math.max(1, Number(match[1]));
+    }
+
+    return 1;
+};
+
+Game_Event.prototype.isPlayerInLineRange = function(range) {
+    range = Math.max(1, range || 1);
+
+    for (var i = 1; i <= range; i++) {
+        var x = this.x;
+        var y = this.y;
+
+        if (this.direction() === 2) y += i;
+        else if (this.direction() === 4) x -= i;
+        else if (this.direction() === 6) x += i;
+        else if (this.direction() === 8) y -= i;
+
+        if ($gamePlayer.x === x && $gamePlayer.y === y) {
+            return true;
+        }
+    }
+
+    return false;
+};
+
+Game_Event.prototype.canUseEnemySkillByRange = function(skill) {
+    return this.isPlayerInLineRange(this.enemySkillRange(skill));
+};
+
+Game_Event.prototype.queueEnemyAttackObject = function(skill, delay) {
+    if (!skill) return false;
+
+    this._pendingAttackObjectSkill = skill;
+    this._pendingAttackObjectDelay = Math.max(0, delay || 0);
+    return true;
+};
+
+Game_Event.prototype.updateQueuedAttackObject = function() {
+    if (!this._pendingAttackObjectSkill) return;
+
+    if (this._pendingAttackObjectDelay > 0) {
+        this._pendingAttackObjectDelay--;
+        return;
+    }
+
+    var skill = this._pendingAttackObjectSkill;
+    this._pendingAttackObjectSkill = null;
+    this._pendingAttackObjectDelay = 0;
+
+    if (this.spawnEnemySkillAttackObject) {
+        this.spawnEnemySkillAttackObject(skill);
+    }
+};
+
+if (PluginManager.registerCommand) {
+    PluginManager.registerCommand("CF_Enemy", "EnemyRespawn", function() {
+        var event = $gameMap.event(this._eventId);
+        if (event) {
+            event.respawnEnemy();
+        }
+    });
+
+    PluginManager.registerCommand("CF_Enemy", "EnemyAttackPlayer", function() {
+        var event = $gameMap.event(this._eventId);
+        if (event) {
+            event.attackPlayer();
+        }
+    });
+}
+})();
