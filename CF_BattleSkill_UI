@@ -1,0 +1,462 @@
+/*:
+ * @target MZ
+ * @plugindesc 地图技能UI（QWER 技能栏显示 / 冷却 / MP检测）
+ * @author CFpanda
+ *
+ * @param WindowX
+ * @text UI X坐标
+ * @type number
+ * @default 330
+ * @desc 技能栏X位置（屏幕左上角为0,0）
+ *
+ * @param WindowY
+ * @text UI Y坐标
+ * @type number
+ * @default 620
+ * @desc 技能栏Y位置
+ *
+ * @help
+ * =============================================================================
+ * ■ 插件介绍
+ * =============================================================================
+ * 本插件用于在地图界面显示技能UI：
+ * 
+ * ● 显示 Q / W / E / R 四个技能槽
+ * ● 显示技能图标
+ * ● 显示按键提示
+ * ● 显示冷却时间（CD）
+ * ● MP / TP 不足时变暗
+ * 
+ * ※ 本插件只负责显示，不处理技能释放逻辑
+ * 
+ * =============================================================================
+ * ■ 功能特点
+ * =============================================================================
+ * ● 自动读取当前角色技能
+ * ● 支持武器切换技能组
+ * ● 实时刷新技能状态（CD / MP）
+ * ● 圆角UI风格（自绘）
+ * ● 性能优化（仅状态变化时刷新）
+ * 
+ * =============================================================================
+ * ■ 技能来源
+ * =============================================================================
+ * 默认读取：
+ * 
+ * $gameParty.leader().mapSkillIds()
+ * 
+ * 要求：
+ * ● 必须返回数组：[Q, W, E, R]
+ * ● 例如：[3, 4, 5, 6]
+ * 
+ * 如果没有该函数：
+ * ● 不报错
+ * ● UI不显示技能
+ * 
+ * =============================================================================
+ * ■ 冷却系统（联动）
+ * =============================================================================
+ * 读取：
+ * 
+ * $gamePlayer.skillCooldownLeft(skillId)
+ * 
+ * 说明：
+ * ● 返回剩余帧数
+ * ● > 0 时显示数字
+ * ● = 0 时不显示
+ * 
+ * 如果没有该函数：
+ * ● 默认无冷却显示
+ * 
+ * =============================================================================
+ * ■ MP / TP 显示规则
+ * =============================================================================
+ * ● 能使用 → 正常显示
+ * ● 不能使用 → 半透明变暗
+ * 
+ * 判断方式：
+ * actor.canPaySkillCost(skill)
+ * 
+ * =============================================================================
+ * ■ UI布局
+ * =============================================================================
+ * 默认位置：地图左下角
+ * 
+ * ● 共 4 个槽位
+ * ● 横向排列
+ * ● 每个槽显示：
+ *   - 技能图标
+ *   - 冷却数字（覆盖层）
+ *   - 按键（Q/W/E/R）
+ * 
+ * =============================================================================
+ * ■ 按键标识
+ * =============================================================================
+ * Q / W / E / R 会显示在每个槽右下角
+ * 
+ * =============================================================================
+ * ■ 刷新机制（优化说明）
+ * =============================================================================
+ * 本插件不会每帧重绘，而是：
+ * 
+ * 当以下变化时才刷新：
+ * ● 技能ID变化
+ * ● 学习状态变化
+ * ● MP / TP 状态变化
+ * ● 冷却变化
+ * 
+ * 👉 减少性能消耗
+ * 
+ * =============================================================================
+ * ■ 可修改配置（代码内）
+ * =============================================================================
+ * 可在插件顶部调整：
+ * 
+ * ● UI位置（WINDOW_X / WINDOW_Y）
+ * ● 槽大小（SLOT_SIZE）
+ * ● 间距（SLOT_SPACING）
+ * ● 圆角（SLOT_RADIUS）
+ * 
+ * =============================================================================
+ * ■ 注意事项
+ * =============================================================================
+ * ● 本插件仅在地图界面显示
+ * ● 不处理按键输入（由技能系统插件负责）
+ * ● 必须配合：
+ *   - 技能系统插件
+ *   - 攻击体系统
+ * 
+ * =============================================================================
+ * ■ 推荐搭配
+ * =============================================================================
+ * ● CF_PlayerSkillCast（技能释放）
+ * ● CF_PlayerActionMotion（动作）
+ * ● CF_AttackObject（攻击体）
+ * ● CF_SetPosition（角色偏移）
+ * 
+ * 👉 组成完整 ARPG UI + 战斗系统
+ * 
+ * =============================================================================
+ * ■ 版权说明
+ * =============================================================================
+ * 本插件仅限：
+ * ● 学习用途
+ * ● 非商业使用
+ * 
+ * 禁止：
+ * ● 商业使用
+ * 
+ * =============================================================================
+ */
+
+(() => {
+    "use strict";
+
+    const SLOT_SIZE = 32;
+    const SLOT_SPACING = 8;
+    const SLOT_RADIUS = 6;
+    const WINDOW_PADDING = 8;
+
+    const WINDOW_WIDTH = 180;
+    const WINDOW_HEIGHT = 84;
+
+    // 地图左下角位置
+    const parameters = PluginManager.parameters("CF_Skill_UI");
+
+    const WINDOW_X = Number(parameters["WindowX"] || 330);
+    const WINDOW_Y = Number(parameters["WindowY"] || 620);
+
+    const KEY_NAMES = ["Q", "W", "E", "R"];
+
+    //==================================================
+    // 1. 工具
+    //==================================================
+    function getLeader() {
+        return $gameParty ? $gameParty.leader() : null;
+    }
+
+    function getSkillIds(actor) {
+        if (!actor || typeof actor.mapSkillIds !== "function") {
+            return [0, 0, 0, 0];
+        }
+        const result = actor.mapSkillIds();
+        if (!Array.isArray(result)) {
+            return [0, 0, 0, 0];
+        }
+        return [
+            Number(result[0] || 0),
+            Number(result[1] || 0),
+            Number(result[2] || 0),
+            Number(result[3] || 0)
+        ];
+    }
+
+    function getCooldown(skillId) {
+        if (!$gamePlayer || typeof $gamePlayer.skillCooldownLeft !== "function") {
+            return 0;
+        }
+        return Number($gamePlayer.skillCooldownLeft(skillId) || 0);
+    }
+
+    //==================================================
+    // 2. 技能UI窗口
+    //==================================================
+    function Window_PlayerSkillBar() {
+        this.initialize(...arguments);
+    }
+
+    Window_PlayerSkillBar.prototype = Object.create(Window_Base.prototype);
+    Window_PlayerSkillBar.prototype.constructor = Window_PlayerSkillBar;
+
+    Window_PlayerSkillBar.prototype.initialize = function() {
+        const rect = new Rectangle(WINDOW_X, WINDOW_Y, WINDOW_WIDTH, WINDOW_HEIGHT);
+        Window_Base.prototype.initialize.call(this, rect);
+
+        this.opacity = 0;
+        this.contentsOpacity = 255;
+
+        this._lastRefreshKey = "";
+        this.refresh();
+    };
+
+    Window_PlayerSkillBar.prototype.update = function() {
+        Window_Base.prototype.update.call(this);
+        this.updateRefresh();
+        this.updateVisibility();
+    };
+
+    Window_PlayerSkillBar.prototype.updateVisibility = function() {
+        // 按需要你也可以在这里加“事件中隐藏 / 对话中隐藏”
+        this.visible = SceneManager._scene instanceof Scene_Map;
+    };
+
+Window_PlayerSkillBar.prototype.makeRefreshKey = function() {
+    const actor = getLeader();
+    if (!actor) return "no_actor";
+
+    const skillIds = getSkillIds(actor);
+
+    const learned = skillIds.map(skillId =>
+        actor.isLearnedSkill ? actor.isLearnedSkill(skillId) : false
+    );
+
+    const payable = skillIds.map(skillId => {
+        const skill = $dataSkills[skillId];
+        return skill && actor.canPaySkillCost ? actor.canPaySkillCost(skill) : false;
+    });
+
+    const cooldowns = skillIds.map(skillId => getCooldown(skillId));
+
+    const ammoStates = skillIds.map(skillId => {
+        const skill = $dataSkills[skillId];
+        if (!skill) return true;
+
+        const type = $gamePlayer.skillAttackObjectType
+            ? $gamePlayer.skillAttackObjectType(skill)
+            : "";
+
+        if (type === "arrow") {
+            const weapon = actor.weapons && actor.weapons()[0];
+            const isBow = weapon && (
+                weapon.wtypeId === 2 ||
+                /<ammoWeaponIds:/i.test(weapon.note || "")
+            );
+
+            if (isBow) {
+                return actor.hasAmmo ? actor.hasAmmo() : false;
+            }
+        }
+
+        return true;
+    });
+
+    return JSON.stringify({
+        skillIds: skillIds,
+        learned: learned,
+        payable: payable,
+        cooldowns: cooldowns,
+        ammoStates: ammoStates
+    });
+};
+
+    Window_PlayerSkillBar.prototype.updateRefresh = function() {
+        const key = this.makeRefreshKey();
+        if (this._lastRefreshKey !== key) {
+            this._lastRefreshKey = key;
+            this.refresh();
+        }
+    };
+
+    Window_PlayerSkillBar.prototype.refresh = function() {
+        this.contents.clear();
+
+        const actor = getLeader();
+        if (!actor) return;
+
+        const skillIds = getSkillIds(actor);
+
+        const startX = 0;
+        const startY = 8;
+
+        for (let i = 0; i < 4; i++) {
+            const x = startX + i * (SLOT_SIZE + SLOT_SPACING);
+            const y = startY;
+            const skillId = skillIds[i] || 0;
+            this.drawSkillSlot(x, y, SLOT_SIZE, KEY_NAMES[i], skillId);
+        }
+    };
+
+    Window_PlayerSkillBar.prototype.drawSkillSlot = function(x, y, size, keyText, skillId) {
+        const actor = getLeader();
+        const radius = SLOT_RADIUS;
+
+        // 背景
+        this.fillRoundRect(x, y, size, size, radius, "rgba(0, 0, 0, 0.5)");
+
+        let learned = false;
+        let skill = null;
+
+        if (actor && skillId > 0 && $dataSkills[skillId]) {
+            skill = $dataSkills[skillId];
+            learned = actor.isLearnedSkill ? actor.isLearnedSkill(skillId) : false;
+        }
+
+        if (learned && skill) {
+            this.drawIcon(skill.iconIndex, x, y);
+
+            // MP/TP 不足变暗
+let cannotUse = false;
+
+// MP / TP 不够
+if (actor.canPaySkillCost && !actor.canPaySkillCost(skill)) {
+    cannotUse = true;
+}
+
+// 👉 新增：箭不足
+const type = $gamePlayer.skillAttackObjectType
+    ? $gamePlayer.skillAttackObjectType(skill)
+    : "";
+
+if (type === "arrow") {
+    const weapon = actor.weapons()[0];
+
+    const isBow = weapon && (
+        weapon.wtypeId === 2 ||
+        /<ammoWeaponIds:/i.test(weapon.note || "")
+    );
+
+    if (isBow && actor.hasAmmo && !actor.hasAmmo()) {
+        cannotUse = true;
+    }
+}
+
+// 👉 统一灰掉
+if (cannotUse) {
+    this.contents.paintOpacity = 255;
+    this.fillRoundRect(x, y, size, size, radius, "rgba(0, 0, 0, 0.45)");
+}
+
+            // 冷却遮罩
+            const cd = getCooldown(skillId);
+            if (cd > 0) {
+                this.fillRoundRect(x, y, size, size, radius, "rgba(0, 0, 0, 0.55)");
+
+                this.contents.fontSize = 18;
+                this.changeTextColor("#ffffff");
+                this.contents.outlineColor = "rgba(0,0,0,1)";
+                this.contents.outlineWidth = 4;
+                this.drawText(String(cd), x, y + 6, size, 20, "center");
+            }
+        }
+
+        // 外框
+        this.strokeRoundRect(x, y, size, size, radius, "rgba(255,255,255,0.15)", 1);
+
+        // 按键字
+        this.contents.fontSize = 14;
+        this.changeTextColor("#ffffff");
+        this.contents.outlineColor = "rgba(0,0,0,1)";
+        this.contents.outlineWidth = 3;
+        this.drawText(keyText, x, y + size - 15, size - 2, 14, "right");
+
+        this.resetFontSettings();
+    };
+
+    Window_PlayerSkillBar.prototype.fillRoundRect = function(x, y, width, height, radius, color) {
+        const ctx = this.contents.context || this.contents._context;
+        if (!ctx) return;
+
+        ctx.save();
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.moveTo(x + radius, y);
+        ctx.lineTo(x + width - radius, y);
+        ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+        ctx.lineTo(x + width, y + height - radius);
+        ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+        ctx.lineTo(x + radius, y + height);
+        ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+        ctx.lineTo(x, y + radius);
+        ctx.quadraticCurveTo(x, y, x + radius, y);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+
+        if (this.contents.baseTexture) {
+            this.contents.baseTexture.update();
+        } else if (this.contents._baseTexture) {
+            this.contents._baseTexture.update();
+        } else if (this.contents._setDirty) {
+            this.contents._setDirty();
+        }
+    };
+
+    Window_PlayerSkillBar.prototype.strokeRoundRect = function(x, y, width, height, radius, color, lineWidth) {
+        const ctx = this.contents.context || this.contents._context;
+        if (!ctx) return;
+
+        ctx.save();
+        ctx.strokeStyle = color;
+        ctx.lineWidth = lineWidth || 1;
+        ctx.beginPath();
+        ctx.moveTo(x + radius, y);
+        ctx.lineTo(x + width - radius, y);
+        ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+        ctx.lineTo(x + width, y + height - radius);
+        ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+        ctx.lineTo(x + radius, y + height);
+        ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+        ctx.lineTo(x, y + radius);
+        ctx.quadraticCurveTo(x, y, x + radius, y);
+        ctx.closePath();
+        ctx.stroke();
+        ctx.restore();
+
+        if (this.contents.baseTexture) {
+            this.contents.baseTexture.update();
+        } else if (this.contents._baseTexture) {
+            this.contents._baseTexture.update();
+        } else if (this.contents._setDirty) {
+            this.contents._setDirty();
+        }
+    };
+
+    //==================================================
+    // 3. 地图场景创建窗口
+    //==================================================
+    const _Scene_Map_createAllWindows = Scene_Map.prototype.createAllWindows;
+    Scene_Map.prototype.createAllWindows = function() {
+        _Scene_Map_createAllWindows.call(this);
+        this.createPlayerSkillBar();
+    };
+
+    Scene_Map.prototype.createPlayerSkillBar = function() {
+        if (this._playerSkillBarWindow) {
+            this.removeChild(this._playerSkillBarWindow);
+            this._playerSkillBarWindow = null;
+        }
+
+        this._playerSkillBarWindow = new Window_PlayerSkillBar();
+        this.addWindow(this._playerSkillBarWindow);
+    };
+})();
