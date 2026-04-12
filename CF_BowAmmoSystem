@@ -1,0 +1,220 @@
+/*:
+ * @target MZ
+ * @plugindesc 弓箭消耗系统（箭=武器，攻击时消耗并增加攻击力）
+ * @author ChatGPT
+ *
+ * @help
+ * =========================================================
+ * ■ 功能
+ * =========================================================
+ * ● 弓攻击时必须消耗“箭”（武器）
+ * ● 箭不可装备，只作为消耗品
+ * ● 不同箭提供不同攻击力加成
+ * ● 没有箭无法攻击
+ *
+ * =========================================================
+ * ■ 武器备注（弓）
+ * =========================================================
+ * <ammoWeaponIds:21,22,23>
+ *
+ * =========================================================
+ * ■ 武器备注（箭）
+ * =========================================================
+ * <ammoAtk:10> 攻击力
+ *
+ * =========================================================
+ */
+
+(function() {
+
+    //==============================
+    // 1. 读取弓支持的箭
+    //==============================
+    Game_Actor.prototype.bowAmmoWeaponIds = function() {
+        const weapon = this.weapons()[0];
+        if (!weapon) return [];
+
+        const note = weapon.note || "";
+        const match = note.match(/<ammoWeaponIds:([\d,]+)>/i);
+        if (!match) return [];
+
+        return match[1].split(",").map(n => Number(n.trim()));
+    };
+
+    //==============================
+    // 2. 找当前可用箭
+    //==============================
+    Game_Actor.prototype.currentAmmoWeapon = function() {
+        const ids = this.bowAmmoWeaponIds();
+        for (const id of ids) {
+            const w = $dataWeapons[id];
+            if ($gameParty.numItems(w) > 0) {
+                return w;
+            }
+        }
+        return null;
+    };
+
+    //==============================
+    // 3. 箭攻击加成
+    //==============================
+Game_Actor.prototype.currentAmmoAtk = function() {
+    const ammo = this.currentAmmoWeapon();
+    if (!ammo) return 0;
+
+    // 武器资料库里的“攻击力”
+    return ammo.params ? Number(ammo.params[2] || 0) : 0;
+};
+    //==============================
+    // 4. 是否有箭
+    //==============================
+    Game_Actor.prototype.hasAmmo = function() {
+        return !!this.currentAmmoWeapon();
+    };
+
+Game_Actor.prototype.prepareAmmoBonus = function() {
+    const ammo = this.currentAmmoWeapon();
+    this._cachedAmmoAtk = ammo && ammo.params ? Number(ammo.params[2] || 0) : 0;
+};
+
+Game_Actor.prototype.cachedAmmoAtk = function() {
+    return Number(this._cachedAmmoAtk || 0);
+};
+
+Game_Actor.prototype.clearCachedAmmoAtk = function() {
+    this._cachedAmmoAtk = 0;
+};
+    //==============================
+    // 5. 扣箭
+    //==============================
+    Game_Actor.prototype.consumeAmmo = function() {
+        const ammo = this.currentAmmoWeapon();
+        if (ammo) {
+            $gameParty.loseItem(ammo, 1);
+        }
+    };
+
+    //==============================
+    // 6. 攻击前检查（核心）
+    //==============================
+const _attackFrontEnemy = Game_Player.prototype.attackFrontEnemy;
+Game_Player.prototype.attackFrontEnemy = function() {
+
+    const actor = $gameParty.leader();
+    if (!actor) return false;
+
+    const weapon = actor.weapons()[0];
+
+    // 没武器时，不拦截，直接走原本空手A键技能逻辑
+    if (!weapon) {
+        return _attackFrontEnemy.call(this);
+    }
+
+    // 判断是否是弓（方式1：类型2）
+    const isBow = weapon.wtypeId === 2;
+
+    // 判断是否是弓（方式2：有备注）
+    const hasAmmoConfig = /<ammoWeaponIds:/i.test(weapon.note || "");
+
+    if (isBow || hasAmmoConfig) {
+        if (!actor.hasAmmo()) {
+            AudioManager.playSe({
+                name: "Cancel2",
+                volume: 80,
+                pitch: 100,
+                pan: 0
+            });
+
+            this.showSimplePopup("没有箭");
+            return false;
+        }
+    }
+
+    return _attackFrontEnemy.call(this);
+};
+
+    //==============================
+    // 7. 发射后扣箭
+    //==============================
+const _queueAttackObject = Game_Player.prototype.queueAttackObject;
+Game_Player.prototype.queueAttackObject = function(skill, type) {
+
+    const actor = $gameParty.leader();
+    if (actor && type === "arrow") {
+        actor.prepareAmmoBonus(); // ⭐先记录
+        actor.consumeAmmo();      // ⭐再扣箭
+    }
+
+    return _queueAttackObject.call(this, skill, type);
+};
+    //==============================
+    // 8. 伤害加箭攻击力
+    //==============================
+const _useMapSkill = Game_Player.prototype.useMapSkill;
+Game_Player.prototype.useMapSkill = function(skillId, slotIndex) {
+
+    const actor = this.playerBattler ? this.playerBattler() : null;
+    if (!actor) return false;
+
+    const skill = $dataSkills[skillId];
+    if (!skill) return false;
+
+    const type = this.skillAttackObjectType ? this.skillAttackObjectType(skill) : "";
+
+    // 👉 只限制箭技能
+    if (type === "arrow") {
+
+        const weapon = actor.weapons()[0];
+
+        const isBow = weapon && (
+            weapon.wtypeId === 2 ||
+            /<ammoWeaponIds:/i.test(weapon.note || "")
+        );
+
+        if (isBow && !actor.hasAmmo()) {
+
+            AudioManager.playSe({
+                name: "Cancel2",
+                volume: 60,
+                pitch: 100,
+                pan: 0
+            });
+
+        this.showSimplePopup("没有箭");
+
+            return false;
+        }
+    }
+
+    return _useMapSkill.call(this, skillId, slotIndex);
+};
+
+Game_Player.prototype.showSimplePopup = function(text, color) {
+    if (this.showDamageText) {
+        this.showDamageText(text, color || "#ff8080", 22);
+        return;
+    }
+
+    // 备用：简单Sprite（如果没有 showDamageText）
+    const sprite = new Sprite(new Bitmap(120, 32));
+    sprite.bitmap.fontSize = 20;
+    sprite.bitmap.textColor = color || "#ff8080";
+    sprite.bitmap.drawText(text, 0, 0, 120, 32, "center");
+
+    sprite.x = this.screenX() - 60;
+    sprite.y = this.screenY() - 80;
+
+    SceneManager._scene.addChild(sprite);
+
+    let life = 60;
+    sprite.update = function() {
+        life--;
+        this.y -= 0.5;
+        this.opacity -= 4;
+        if (life <= 0) {
+            this.parent.removeChild(this);
+        }
+    };
+};
+
+})();
