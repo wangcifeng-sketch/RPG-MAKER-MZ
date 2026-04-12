@@ -1,6 +1,6 @@
 /*:
  * @target MZ
- * @plugindesc [v1.0] 地图金钱HUD（类似 MOG_GoldHud）- 使用 Gold_A / Gold_B 素材
+ * @plugindesc [v1.0] 地图金钱HUD 使用 Gold_A / Gold_B 素材
  * @author CFpanda
  * @url
  *
@@ -8,7 +8,7 @@
  * ============================================================================
  * CF_GoldHud.js
  * ============================================================================
- * 适用于 RPG Maker MZ / EMMZ
+ * 适用于 RPG Maker MZ
  *
  * 功能：
  * - 在地图界面显示金钱 HUD
