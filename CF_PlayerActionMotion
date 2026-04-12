@@ -1,0 +1,421 @@
+/*:
+ * @target MZ
+ * @plugindesc 玩家武器动作插件（根据武器切换攻击动作图 + 技能音效支持）
+ * @author CF_panda
+ *
+ * @help
+ * =============================================================================
+ * ■ 插件介绍
+ * =============================================================================
+ * 本插件用于在地图战斗中，为玩家角色播放武器对应的攻击动作。
+ * 
+ * 当玩家使用技能或攻击时：
+ * ● 根据当前武器备注切换动作图
+ * ● 播放攻击动画帧
+ * ● 动作结束后恢复原角色图
+ * ● 支持技能音效备注
+ * 
+ * =============================================================================
+ * ■ 功能特点
+ * =============================================================================
+ * ● 根据武器自动切换攻击动作
+ * ● 支持 4方向 × 3帧 动作图
+ * ● 动作播放完自动恢复角色
+ * ● 支持攻击前摇（延迟生成攻击体）
+ * ● 技能可绑定音效（SE）
+ * ● 支持多种攻击类型（斩击 / 弓箭 / 拳击）
+ * 
+ * =============================================================================
+ * ■ 武器备注（动作图）
+ * =============================================================================
+ * 在武器备注中写：
+ * 
+ * <motion:$Player_Swd01>
+ * 
+ * 说明：
+ * ● motion 后填写角色图文件名
+ * ● 文件路径：img/Actions/
+ * ● 必须使用 $ 开头（单角色图）
+ * 
+ * 示例：
+ * <motion:$Player_Swd01>
+ * <motion:$Player_bow01>
+ * 
+ * =============================================================================
+ * ■ 动作图格式要求
+ * =============================================================================
+ * 必须符合 RPG Maker 标准角色图：
+ * 
+ * ● 单角色图（文件名前带 $）
+ * ● 4行 × 3列
+ * ● 顺序：
+ *   下 → 左 → 右 → 上
+ * 
+ * 每次动作播放：
+ * ● 按 0 → 1 → 2 帧播放
+ * ● 播放完成后恢复原角色
+ * 
+ * =============================================================================
+ * ■ 技能触发动作条件
+ * =============================================================================
+ * 技能备注中写：
+ * 
+ * <attackObject:slash>
+ * <attackObject:arrow>
+ * <attackObject:punch>
+ * 
+ * 说明：
+ * ● 只有带这些标签的技能才会触发武器动作
+ * ● 同时会触发攻击体生成逻辑（需配合其他系统）
+ *
+ * =============================================================================
+ * ■ 技能备注（使用者前面动画）
+ * =============================================================================
+ *
+ * <Animation:X>   X=动画ID
+ *
+ * =============================================================================
+ * ■ 技能音效（SE）
+ * =============================================================================
+ * 技能备注支持：
+ * 
+ * 【简写】
+ * <se:Slash1>
+ * 
+ * 【完整写法】
+ * <se:Slash1,90,100,0>
+ * 
+ * 格式说明：
+ * <se:文件名,音量,音调,声像>
+ * 
+ * 默认值：
+ * ● 音量：90
+ * ● 音调：100
+ * ● 声像：0
+ * 
+ * =============================================================================
+ * ■ 动作执行流程
+ * =============================================================================
+ * 使用技能时：
+ * 
+ * 1. 判断技能是否需要武器动作
+ * 2. 读取武器 motion
+ * 3. 切换角色图
+ * 4. 播放动作帧
+ * 5. 播放技能音效
+ * 6. 延迟生成攻击体（前摇）
+ * 7. 动作结束恢复角色
+ * 
+ * =============================================================================
+ * ■ 默认行为说明
+ * =============================================================================
+ * ● 如果没有武器：
+ *   使用默认动作：$Player_Punch
+ * 
+ * ● 如果没有 <motion>：
+ *   不播放动作
+ * 
+ * ● 如果没有 <se>：
+ *   不播放音效
+ * 
+ * =============================================================================
+ * ■ 注意事项
+ * =============================================================================
+ * ● 本插件作用于地图战斗系统（非回合制）
+ * ● 依赖技能备注标签触发
+ * ● 动作图必须规范，否则显示异常
+ * ● 与角色图替换类插件可能冲突
+ * 
+ * =============================================================================
+ * ■ 兼容性
+ * =============================================================================
+ * ● 适用于 RPG Maker MZ
+ * ● 可与攻击体系统联动（queueAttackObject）
+ * ● 若修改 Game_Player.update 需注意冲突
+ * 
+ * =============================================================================
+ * ■ 版权说明
+ * =============================================================================
+ * 本插件仅限：
+ * ● 学习用途
+ * ● 非商业使用
+ * 
+ * 禁止：
+ * ● 商业使用
+ * 
+ * =============================================================================
+ */
+
+(function() {
+
+    var _Game_Player_initMembers = Game_Player.prototype.initMembers;
+    Game_Player.prototype.initMembers = function() {
+        _Game_Player_initMembers.call(this);
+
+        this._motionPlaying = false;
+        this._motionWait = 0;
+        this._motionFrame = 0;
+        this._motionCharacterName = "";
+        this._motionCharacterIndex = 0;
+
+        this._motionTotalFrames = 3;
+        this._motionSpeed = 5;
+
+        this._savedCharacterName = "";
+        this._savedCharacterIndex = 0;
+    };
+
+    Game_Player.prototype.playerBattler = Game_Player.prototype.playerBattler || function() {
+        return $gameParty.leader();
+    };
+
+    Game_Player.prototype.currentWeapon = function() {
+        var actor = this.playerBattler();
+        if (!actor) return null;
+
+        var weapons = actor.weapons();
+        return (weapons && weapons.length > 0) ? weapons[0] : null;
+    };
+
+    Game_Player.prototype.weaponMotionName = function() {
+        var weapon = this.currentWeapon();
+
+        if (!weapon) return "$Player_Punch";
+
+        var note = weapon.note || "";
+        var match = note.match(/<motion:([^>]+)>/i);
+        return match ? String(match[1]).trim() : "";
+    };
+
+    Game_Player.prototype.canPlayWeaponMotion = function() {
+        return !!this.weaponMotionName();
+    };
+
+Game_Player.prototype.skillNeedsWeaponMotion = function(skill) {
+    if (!skill) return false;
+    if (!this.canPlayWeaponMotion()) return false;
+
+    var note = skill.note || "";
+    if (/<attackObject:slash>/i.test(note)) return true;
+    if (/<attackObject:arrow>/i.test(note)) return true;
+    if (/<attackObject:punch>/i.test(note)) return true;
+
+    return false;
+};
+
+    Game_Player.prototype.startWeaponMotion = function() {
+        var motionName = this.weaponMotionName();
+        if (!motionName) return false;
+        if (this._motionPlaying) return false;
+
+        this._savedCharacterName = this.characterName();
+        this._savedCharacterIndex = this.characterIndex();
+
+        this._motionPlaying = true;
+        this._motionFrame = 0;
+        this._motionWait = this._motionSpeed;
+
+        this._motionCharacterName = motionName;
+        this._motionCharacterIndex = 0;
+
+        this.setImage(this._motionCharacterName, this._motionCharacterIndex);
+        this.setPattern(0);
+        return true;
+    };
+
+    Game_Player.prototype.endWeaponMotion = function() {
+        if (!this._motionPlaying) return;
+
+        this._motionPlaying = false;
+        this._motionWait = 0;
+        this._motionFrame = 0;
+
+        this.setImage(
+            this._savedCharacterName || this.characterName(),
+            this._savedCharacterIndex || 0
+        );
+        this.setPattern(1);
+    };
+
+    Game_Player.prototype.updateWeaponMotion = function() {
+        if (!this._motionPlaying) return;
+
+        if (this._motionWait > 0) {
+            this._motionWait--;
+            return;
+        }
+
+        this._motionWait = this._motionSpeed;
+        this._motionFrame++;
+
+        if (this._motionFrame >= this._motionTotalFrames) {
+            this.endWeaponMotion();
+            return;
+        }
+
+        this.setPattern(this._motionFrame);
+    };
+
+    Game_Player.prototype.skillCastSeData = function(skill) {
+        if (!skill) return null;
+
+        var note = skill.note || "";
+
+        var fullMatch = note.match(/<se:([^,>]+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(-?\d+)\s*>/i);
+        if (fullMatch) {
+            return {
+                name: String(fullMatch[1]).trim(),
+                volume: Number(fullMatch[2] || 90),
+                pitch: Number(fullMatch[3] || 100),
+                pan: Number(fullMatch[4] || 0)
+            };
+        }
+
+        var simpleMatch = note.match(/<se:([^>]+)>/i);
+        if (simpleMatch) {
+            return {
+                name: String(simpleMatch[1]).trim(),
+                volume: 90,
+                pitch: 100,
+                pan: 0
+            };
+        }
+
+        return null;
+    };
+
+    Game_Player.prototype.playSkillCastSe = function(skill) {
+        var se = this.skillCastSeData ? this.skillCastSeData(skill) : null;
+        if (!se || !se.name) return false;
+
+        AudioManager.playSe({
+            name: se.name,
+            volume: se.volume != null ? se.volume : 90,
+            pitch: se.pitch != null ? se.pitch : 100,
+            pan: se.pan != null ? se.pan : 0
+        });
+
+        return true;
+    };
+
+    Game_Player.prototype.motionDelayFrames = function() {
+        return this._motionTotalFrames * this._motionSpeed;
+    };
+
+    Game_Player.prototype.updatePendingAttackObjects = function() {
+        if (!this._pendingAttackObjects || this._pendingAttackObjects.length === 0) return;
+
+        for (var i = this._pendingAttackObjects.length - 1; i >= 0; i--) {
+            var item = this._pendingAttackObjects[i];
+            if (!item) continue;
+
+            item.wait--;
+            if (item.wait > 0) continue;
+
+            if (this.spawnQueuedAttackObject) {
+                this.spawnQueuedAttackObject(item.skill, item.type);
+            }
+
+            this._pendingAttackObjects.splice(i, 1);
+        }
+    };
+
+    var _Game_Player_update = Game_Player.prototype.update;
+    Game_Player.prototype.update = function(sceneActive) {
+        _Game_Player_update.call(this, sceneActive);
+        this.updateWeaponMotion();
+        this.updatePendingAttackObjects();
+    };
+
+Game_Player.prototype.queueAttackObject = function(skill, type) {
+    if (!skill || !type) return false;
+
+    if (!this._pendingAttackObjects) {
+        this._pendingAttackObjects = [];
+    }
+
+    var wait = 0;
+
+    if (this.skillCastTime) {
+        wait += this.skillCastTime(skill);
+    }
+
+    if (this.playCastStartAnimation) {
+        this.playCastStartAnimation(skill);
+    }
+
+    var playedSe = false;
+
+    if (this.skillNeedsWeaponMotion(skill)) {
+        this.startWeaponMotion();
+        this.playSkillCastSe(skill);
+        playedSe = true;
+        wait += this.motionDelayFrames();
+    }
+
+    if (!playedSe) {
+        this.playSkillCastSe(skill);
+    }
+
+    this._pendingAttackObjects.push({
+        skill: skill,
+        type: type,
+        wait: wait
+    });
+
+    return true;
+};
+
+//=============================================================================
+// ■ Actions目录专用角色图加载
+//=============================================================================
+
+ImageManager.loadActionCharacter = function(filename) {
+    return this.loadBitmap("img/Actions/", filename);
+};
+
+ImageManager.isActionBigCharacter = function(filename) {
+    var name = filename || "";
+    return name.charAt(0) === "$";
+};
+
+var _Sprite_Character_setCharacterBitmap_CFActionPath =
+    Sprite_Character.prototype.setCharacterBitmap;
+
+Sprite_Character.prototype.setCharacterBitmap = function() {
+    var character = this._character;
+    var name = character ? character.characterName() : "";
+
+    //==============================
+    // 1. 玩家武器动作图 -> img/Actions/
+    //==============================
+    if (
+        character === $gamePlayer &&
+        $gamePlayer._motionPlaying &&
+        $gamePlayer._motionCharacterName &&
+        name === $gamePlayer._motionCharacterName
+    ) {
+        this.bitmap = ImageManager.loadActionCharacter(name);
+        this._isBigCharacter = ImageManager.isActionBigCharacter(name);
+        return;
+    }
+
+    //==============================
+    // 2. 敌人攻击动作图 -> img/Actions/
+    //==============================
+    if (
+        character instanceof Game_Event &&
+        character._enemyMotionPlaying &&
+        character._enemyAttackCharacterName &&
+        name === character._enemyAttackCharacterName
+    ) {
+        this.bitmap = ImageManager.loadActionCharacter(name);
+        this._isBigCharacter = ImageManager.isActionBigCharacter(name);
+        return;
+    }
+
+    // 其他情况仍然走默认 img/characters/
+    _Sprite_Character_setCharacterBitmap_CFActionPath.call(this);
+};
+
+})();
