@@ -1,7 +1,7 @@
 /*:
  * @target MZ
  * @plugindesc [技能三段冲刺控制器V4] 第一次攻击由原系统处理，本插件延迟后执行：前冲回头补刀，再回原点回头补刀
- * @author ChatGPT
+ * @author CFpanda
  *
  * @help
  * 技能备注：
