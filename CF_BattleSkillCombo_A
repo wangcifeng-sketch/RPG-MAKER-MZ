@@ -1,0 +1,244 @@
+/*:
+ * @target MZ
+ * @plugindesc [技能三段冲刺控制器V4] 第一次攻击由原系统处理，本插件延迟后执行：前冲回头补刀，再回原点回头补刀
+ * @author ChatGPT
+ *
+ * @help
+ * 技能备注：
+ *
+ *   <comboPierce>
+ *   <pierceStep:4>
+ *   <pierceSpeed:6>
+ *
+ * 作用：
+ * 1. 第一次攻击完全由原系统处理，本插件不接管。
+ * 2. 检测到该技能已被使用后，本插件延迟30帧。
+ * 3. 延迟结束后，执行：
+ *    前冲 -> 回头 -> 第二次释放同技能
+ * 4. 然后继续执行：
+ *    冲回原点 -> 回头 -> 第三次释放同技能
+ * 5. 最终角色停在第一次释放技能时的原点。
+ */
+
+(function() {
+
+    function skillHasComboPierce(skill) {
+        return !!(skill && /<comboPierce>/i.test(skill.note || ""));
+    }
+
+    function getPierceStep(skill) {
+        const m = (skill && skill.note || "").match(/<pierceStep:(\d+)>/i);
+        return m ? Math.max(0, Number(m[1])) : 0;
+    }
+
+    function getPierceSpeed(skill) {
+        const m = (skill && skill.note || "").match(/<pierceSpeed:([\d\.]+)>/i);
+        return m ? Math.max(1, Number(m[1])) : 6;
+    }
+
+    const _Game_Player_initMembers = Game_Player.prototype.initMembers;
+    Game_Player.prototype.initMembers = function() {
+        _Game_Player_initMembers.call(this);
+        this._cfComboPierceData = null;
+        this._cfComboPierceForcePass = false;
+        this._cfComboPierceOriginalSpeed = this.moveSpeed();
+    };
+
+    const _Game_Player_queueAttackObject = Game_Player.prototype.queueAttackObject;
+    Game_Player.prototype.queueAttackObject = function(skill, type) {
+        const result = _Game_Player_queueAttackObject.call(this, skill, type);
+
+        if (this._cfComboPierceForcePass) {
+            return result;
+        }
+
+        if (!skillHasComboPierce(skill)) {
+            return result;
+        }
+
+        if (this._cfComboPierceData) {
+            return result;
+        }
+
+        this._cfComboPierceOriginalSpeed = this.moveSpeed();
+
+        this._cfComboPierceData = {
+            skill: skill,
+            type: type,
+            delay: 30,
+            phase: "prepare_forward_move",
+            step: getPierceStep(skill),
+            speed: getPierceSpeed(skill),
+            startedDir: this.direction(),
+            originX: this.x,
+            originY: this.y,
+            forwardTargetX: this.x,
+            forwardTargetY: this.y,
+            movedForward: false
+        };
+
+        return result;
+    };
+
+    const _Game_Player_update = Game_Player.prototype.update;
+    Game_Player.prototype.update = function(sceneActive) {
+        _Game_Player_update.call(this, sceneActive);
+        if (sceneActive) {
+            this.updateComboPierceSequence();
+        }
+    };
+
+    Game_Player.prototype.updateComboPierceSequence = function() {
+        const data = this._cfComboPierceData;
+        if (!data) return;
+
+        if (data.delay > 0) {
+            data.delay--;
+            return;
+        }
+
+        if (this.isMoving()) return;
+
+        if (data.phase === "prepare_forward_move") {
+            const dir = data.startedDir || this.direction();
+            const realStep = this.cfCalcComboPierceStep(dir, data.step);
+
+            if (realStep > 0) {
+                const target = this.cfGetComboPierceTarget(dir, realStep);
+                data.forwardTargetX = target.x;
+                data.forwardTargetY = target.y;
+                data.movedForward = true;
+
+                this.cfExecuteComboPierceMoveTo(target.x, target.y, data.speed);
+                data.phase = "after_forward_move";
+            } else {
+                data.movedForward = false;
+                data.phase = "turn_back_for_second_cast";
+            }
+            return;
+        }
+
+        if (data.phase === "after_forward_move") {
+            this.setMoveSpeed(this._cfComboPierceOriginalSpeed);
+            data.phase = "turn_back_for_second_cast";
+            return;
+        }
+
+        if (data.phase === "turn_back_for_second_cast") {
+            this.setDirection(this.cfOppositeDir(data.startedDir || this.direction()));
+            data.phase = "second_cast";
+            return;
+        }
+
+        if (data.phase === "second_cast") {
+            this._cfComboPierceForcePass = true;
+            _Game_Player_queueAttackObject.call(this, data.skill, data.type);
+            this._cfComboPierceForcePass = false;
+
+            if (data.movedForward) {
+                data.phase = "return_to_origin";
+            } else {
+                data.phase = "finish";
+            }
+            return;
+        }
+
+        if (data.phase === "return_to_origin") {
+            this.cfExecuteComboPierceMoveTo(data.originX, data.originY, data.speed);
+            data.phase = "after_return_move";
+            return;
+        }
+
+        if (data.phase === "after_return_move") {
+            this.setMoveSpeed(this._cfComboPierceOriginalSpeed);
+            data.phase = "turn_back_for_third_cast";
+            return;
+        }
+
+        if (data.phase === "turn_back_for_third_cast") {
+            this.setDirection(data.startedDir);
+            data.phase = "third_cast";
+            return;
+        }
+
+        if (data.phase === "third_cast") {
+            this._cfComboPierceForcePass = true;
+            _Game_Player_queueAttackObject.call(this, data.skill, data.type);
+            this._cfComboPierceForcePass = false;
+            data.phase = "finish";
+            return;
+        }
+
+        if (data.phase === "finish") {
+            this.setMoveSpeed(this._cfComboPierceOriginalSpeed);
+            this._cfComboPierceData = null;
+        }
+    };
+
+    Game_Player.prototype.cfOppositeDir = function(dir) {
+        if (dir === 2) return 8;
+        if (dir === 4) return 6;
+        if (dir === 6) return 4;
+        if (dir === 8) return 2;
+        return dir;
+    };
+
+    Game_Player.prototype.cfCalcComboPierceStep = function(dir, maxStep) {
+        let bestStep = 0;
+        let nx = this.x;
+        let ny = this.y;
+
+        for (let i = 1; i <= maxStep; i++) {
+            const nextX = $gameMap.roundXWithDirection(nx, dir);
+            const nextY = $gameMap.roundYWithDirection(ny, dir);
+
+            if (!$gameMap.isPassable(nx, ny, dir)) break;
+
+            if (this.cfCanComboPierceLand(nextX, nextY)) {
+                bestStep = i;
+            }
+
+            nx = nextX;
+            ny = nextY;
+        }
+
+        return bestStep;
+    };
+
+    Game_Player.prototype.cfGetComboPierceTarget = function(dir, step) {
+        let tx = this.x;
+        let ty = this.y;
+
+        for (let i = 0; i < step; i++) {
+            tx = $gameMap.roundXWithDirection(tx, dir);
+            ty = $gameMap.roundYWithDirection(ty, dir);
+        }
+
+        return { x: tx, y: ty };
+    };
+
+    Game_Player.prototype.cfCanComboPierceLand = function(x, y) {
+        if (!$gameMap.isValid(x, y)) return false;
+
+        const events = $gameMap.eventsXyNt(x, y).filter(function(ev) {
+            return ev !== $gamePlayer;
+        });
+        if (events.length > 0) return false;
+
+        return $gameMap.isPassable(x, y, 2) ||
+               $gameMap.isPassable(x, y, 4) ||
+               $gameMap.isPassable(x, y, 6) ||
+               $gameMap.isPassable(x, y, 8);
+    };
+
+    Game_Player.prototype.cfExecuteComboPierceMoveTo = function(targetX, targetY, speed) {
+        const oldX = this.x;
+        const oldY = this.y;
+
+        this.setMoveSpeed(speed);
+        this.locate(targetX, targetY);
+        this._realX = oldX;
+        this._realY = oldY;
+    };
+
+})();
