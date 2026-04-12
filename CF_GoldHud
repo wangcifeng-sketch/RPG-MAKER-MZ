@@ -1,0 +1,349 @@
+/*:
+ * @target MZ
+ * @plugindesc [v1.0] 地图金钱HUD（类似 MOG_GoldHud）- 使用 Gold_A / Gold_B 素材
+ * @author CFpanda
+ * @url
+ *
+ * @help
+ * ============================================================================
+ * CF_GoldHud.js
+ * ============================================================================
+ * 适用于 RPG Maker MZ / EMMZ
+ *
+ * 功能：
+ * - 在地图界面显示金钱 HUD
+ * - 使用 img/system/Gold_A.png 作为 HUD 底图
+ * - 使用 img/system/Gold_B.png 作为数字图
+ * - 数字图要求为 0~9 横向排列
+ * - 金钱变化时自动刷新
+ * - 支持显示/隐藏 HUD
+ * - 对话窗口显示时自动淡出
+ *
+ * ----------------------------------------------------------------------------
+ * 素材放置
+ * ----------------------------------------------------------------------------
+ * img/system/Gold_A.png   // HUD底图
+ * img/system/Gold_B.png   // 数字图（0~9 横向排列）
+ *
+ * 你当前提供的 Gold_B.png 可按以下规格使用：
+ * - 总宽：200
+ * - 总高：28
+ * - 每个数字：20 x 28
+ * - 顺序：0 1 2 3 4 5 6 7 8 9
+ *
+ * ----------------------------------------------------------------------------
+ * 插件指令
+ * ----------------------------------------------------------------------------
+ * ShowHud   显示HUD
+ * HideHud   隐藏HUD
+ *
+ * ----------------------------------------------------------------------------
+ * 脚本调用
+ * ----------------------------------------------------------------------------
+ * $gameSystem.setGoldHudVisible(true);   // 显示
+ * $gameSystem.setGoldHudVisible(false);  // 隐藏
+ *
+ * ----------------------------------------------------------------------------
+ * 注意
+ * ----------------------------------------------------------------------------
+ * 1. 只在地图场景显示，不会在菜单中显示。
+ * 2. 如果你想让数字更贴近底图，可以调插件参数中的数字坐标。
+ * 3. 如果你后面想加“获得金钱时跳字动画”，可以在这个基础上继续扩展。
+ * ============================================================================
+ *
+ * @command ShowHud
+ * @text 显示HUD
+ *
+ * @command HideHud
+ * @text 隐藏HUD
+ *
+ * @param hudX
+ * @text HUD X
+ * @type number
+ * @default 0
+ *
+ * @param hudY
+ * @text HUD Y
+ * @type number
+ * @default 0
+ *
+ * @param numberX
+ * @text 数字 X
+ * @type number
+ * @default 68
+ *
+ * @param numberY
+ * @text 数字 Y
+ * @type number
+ * @default 18
+ *
+ * @param maxDigits
+ * @text 最大位数
+ * @type number
+ * @min 1
+ * @default 8
+ *
+ * @param digitSpacing
+ * @text 数字间距
+ * @type number
+ * @default 18
+ *
+ * @param opacity
+ * @text HUD透明度
+ * @type number
+ * @min 0
+ * @max 255
+ * @default 255
+ *
+ * @param autoFade
+ * @text 对话时自动淡出
+ * @type boolean
+ * @on 开启
+ * @off 关闭
+ * @default true
+ *
+ * @param fadeOpacity
+ * @text 淡出透明度
+ * @type number
+ * @min 0
+ * @max 255
+ * @default 90
+ *
+ * @param slideWhenHidden
+ * @text 隐藏时滑动
+ * @type boolean
+ * @on 开启
+ * @off 关闭
+ * @default true
+ *
+ * @param slideDistance
+ * @text 隐藏滑动距离
+ * @type number
+ * @default 80
+ *
+ * @param align
+ * @text 数字对齐
+ * @type select
+ * @option left
+ * @option right
+ * @default right
+ */
+
+(() => {
+    "use strict";
+
+    const pluginName = "CF_GoldHud";
+    const params = PluginManager.parameters(pluginName);
+
+    const HUD_X = Number(params.hudX || 0);
+    const HUD_Y = Number(params.hudY || 0);
+    const NUMBER_X = Number(params.numberX || 68);
+    const NUMBER_Y = Number(params.numberY || 18);
+    const MAX_DIGITS = Number(params.maxDigits || 8);
+    const DIGIT_SPACING = Number(params.digitSpacing || 18);
+    const HUD_OPACITY = Number(params.opacity || 255);
+    const AUTO_FADE = String(params.autoFade || "true") === "true";
+    const FADE_OPACITY = Number(params.fadeOpacity || 90);
+    const SLIDE_WHEN_HIDDEN = String(params.slideWhenHidden || "true") === "true";
+    const SLIDE_DISTANCE = Number(params.slideDistance || 80);
+    const ALIGN = String(params.align || "right");
+
+    //--------------------------------------------------------------------------
+    // Game_System
+    //--------------------------------------------------------------------------
+
+    const _Game_System_initialize = Game_System.prototype.initialize;
+    Game_System.prototype.initialize = function() {
+        _Game_System_initialize.call(this);
+        this._cfGoldHudVisible = true;
+    };
+
+    Game_System.prototype.isGoldHudVisible = function() {
+        if (this._cfGoldHudVisible === undefined) {
+            this._cfGoldHudVisible = true;
+        }
+        return this._cfGoldHudVisible;
+    };
+
+    Game_System.prototype.setGoldHudVisible = function(visible) {
+        this._cfGoldHudVisible = !!visible;
+    };
+
+    //--------------------------------------------------------------------------
+    // Plugin Commands
+    //--------------------------------------------------------------------------
+
+    PluginManager.registerCommand(pluginName, "ShowHud", () => {
+        $gameSystem.setGoldHudVisible(true);
+    });
+
+    PluginManager.registerCommand(pluginName, "HideHud", () => {
+        $gameSystem.setGoldHudVisible(false);
+    });
+
+    //--------------------------------------------------------------------------
+    // Sprite_GoldHud
+    //--------------------------------------------------------------------------
+
+    function Sprite_GoldHud() {
+        this.initialize(...arguments);
+    }
+
+    Sprite_GoldHud.prototype = Object.create(Sprite.prototype);
+    Sprite_GoldHud.prototype.constructor = Sprite_GoldHud;
+
+    Sprite_GoldHud.prototype.initialize = function() {
+        Sprite.prototype.initialize.call(this);
+        this._targetX = HUD_X;
+        this._baseX = HUD_X;
+        this._baseY = HUD_Y;
+        this._goldValue = -1;
+        this._digits = [];
+        this.loadBitmaps();
+        this.createLayout();
+        this.createNumbers();
+        this.x = this._baseX;
+        this.y = this._baseY;
+        this.opacity = 0;
+    };
+
+    Sprite_GoldHud.prototype.loadBitmaps = function() {
+        this._layoutBitmap = ImageManager.loadSystem("Gold_A");
+        this._numberBitmap = ImageManager.loadSystem("Gold_B");
+    };
+
+    Sprite_GoldHud.prototype.createLayout = function() {
+        this._layoutSprite = new Sprite(this._layoutBitmap);
+        this.addChild(this._layoutSprite);
+    };
+
+    Sprite_GoldHud.prototype.createNumbers = function() {
+        for (let i = 0; i < MAX_DIGITS; i++) {
+            const sprite = new Sprite(this._numberBitmap);
+            sprite.visible = false;
+            this._digits.push(sprite);
+            this.addChild(sprite);
+        }
+    };
+
+    Sprite_GoldHud.prototype.digitWidth = function() {
+        if (!this._numberBitmap || !this._numberBitmap.isReady()) return 20;
+        return Math.floor(this._numberBitmap.width / 10);
+    };
+
+    Sprite_GoldHud.prototype.digitHeight = function() {
+        if (!this._numberBitmap || !this._numberBitmap.isReady()) return 28;
+        return this._numberBitmap.height;
+    };
+
+    Sprite_GoldHud.prototype.update = function() {
+        Sprite.prototype.update.call(this);
+
+        if (!this.isReady()) return;
+
+        this.updateVisibleState();
+        this.updateOpacity();
+        this.updatePosition();
+        this.updateGoldValue();
+    };
+
+    Sprite_GoldHud.prototype.isReady = function() {
+        return this._layoutBitmap.isReady() && this._numberBitmap.isReady();
+    };
+
+    Sprite_GoldHud.prototype.updateVisibleState = function() {
+        const visible = $gameSystem.isGoldHudVisible();
+        if (visible) {
+            this._targetX = this._baseX;
+        } else {
+            this._targetX = this._baseX + (SLIDE_WHEN_HIDDEN ? SLIDE_DISTANCE : 0);
+        }
+        this.visible = true;
+    };
+
+    Sprite_GoldHud.prototype.updateOpacity = function() {
+        let targetOpacity = 0;
+
+        if ($gameSystem.isGoldHudVisible()) {
+            targetOpacity = HUD_OPACITY;
+            if (AUTO_FADE && $gameMessage.isBusy()) {
+                targetOpacity = FADE_OPACITY;
+            }
+        }
+
+        const speed = 15;
+        if (this.opacity < targetOpacity) {
+            this.opacity = Math.min(this.opacity + speed, targetOpacity);
+        } else if (this.opacity > targetOpacity) {
+            this.opacity = Math.max(this.opacity - speed, targetOpacity);
+        }
+    };
+
+    Sprite_GoldHud.prototype.updatePosition = function() {
+        const moveSpeed = 5;
+        if (this.x < this._targetX) {
+            this.x = Math.min(this.x + moveSpeed, this._targetX);
+        } else if (this.x > this._targetX) {
+            this.x = Math.max(this.x - moveSpeed, this._targetX);
+        }
+        this.y = this._baseY;
+    };
+
+    Sprite_GoldHud.prototype.updateGoldValue = function() {
+        const value = $gameParty.gold();
+        if (this._goldValue !== value) {
+            this._goldValue = value;
+            this.refreshNumbers();
+        }
+    };
+
+    Sprite_GoldHud.prototype.refreshNumbers = function() {
+        const text = Math.max(0, this._goldValue).toString();
+        const chars = text.slice(-MAX_DIGITS).split("");
+        const dw = this.digitWidth();
+        const dh = this.digitHeight();
+
+        for (let i = 0; i < this._digits.length; i++) {
+            this._digits[i].visible = false;
+        }
+
+        let startX = NUMBER_X;
+
+        if (ALIGN === "right") {
+            startX = NUMBER_X + (MAX_DIGITS - chars.length) * DIGIT_SPACING;
+        }
+
+        for (let i = 0; i < chars.length; i++) {
+            const n = Number(chars[i]);
+            const sprite = this._digits[i];
+            sprite.setFrame(n * dw, 0, dw, dh);
+            sprite.x = startX + i * DIGIT_SPACING;
+            sprite.y = NUMBER_Y;
+            sprite.visible = true;
+        }
+    };
+
+    //--------------------------------------------------------------------------
+    // Scene_Map
+    //--------------------------------------------------------------------------
+
+    const _Scene_Map_createDisplayObjects = Scene_Map.prototype.createDisplayObjects;
+    Scene_Map.prototype.createDisplayObjects = function() {
+        _Scene_Map_createDisplayObjects.call(this);
+        this.createGoldHud();
+    };
+
+    Scene_Map.prototype.createGoldHud = function() {
+        this._cfGoldHud = new Sprite_GoldHud();
+        this.addChild(this._cfGoldHud);
+    };
+
+    Game_Party.prototype.maxGold = function() {
+        return 9999999999;
+    };
+
+    Game_Party.prototype.maxItems = function(item) {
+        return 9999;
+};
+
+})();
