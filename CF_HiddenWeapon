@@ -1,7 +1,7 @@
 /*:
  * @target MZ
  * @plugindesc 暗器系统（S键发射 / 支持双武器槽 / 武器类型3 / 数量按实际持有武器计算 / 技能12统一伤害与动画 / UI / 独立飞行体）
- * @author ChatGPT
+ * @author CFpanda
  *
  * @param WindowX
  * @text UI X坐标
