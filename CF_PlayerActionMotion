@@ -1,0 +1,1263 @@
+/*:
+ * @target MZ
+ * @plugindesc Player Weapon Action Motion Plugin - weapon motion / skill SE / swing overlay / fixed remote weapon overlay
+ * @author CFpanda
+ *
+ * @help
+ * ============================================================================
+ * Plugin Introduction
+ * ============================================================================
+ * This plugin plays weapon-related attack motions for the player during map
+ * battle actions.
+ *
+ * When the player uses a skill or attack:
+ * - Reads the current weapon note tags.
+ * - Plays a weapon motion or weapon overlay.
+ * - Plays attack motion frames.
+ * - Restores the original player graphic after the action.
+ * - Supports skill sound effect note tags.
+ *
+ * ============================================================================
+ * Weapon Note Tags
+ * ============================================================================
+ *
+ * Character motion sheet:
+ *
+ * <motion:$Player_Swd01>
+ *
+ * Notes:
+ * - The motion file is loaded from img/Actions/.
+ * - Use a single-character sheet with "$" at the start of the filename.
+ * - The sheet must follow RPG Maker MZ character format: 4 directions x 3 frames.
+ *
+ * Single-image melee swing overlay:
+ *
+ * <swingWeapon:Sword_01>
+ * <swingHandle:38,38>
+ *
+ * Optional per-direction swing frame lists:
+ *
+ * <swingFrames2:x,y,angle|x,y,angle|x,y,angle>
+ * <swingFrames4:x,y,angle|x,y,angle|x,y,angle>
+ * <swingFrames6:x,y,angle|x,y,angle|x,y,angle>
+ * <swingFrames8:x,y,angle|x,y,angle|x,y,angle>
+ *
+ * Remote weapon overlay:
+ *
+ * <remoteWeapon:Bow_01>
+ * <remoteHandle:24,24>
+ * <remoteLayer:front>
+ *
+ * 8-direction remote bow frame positions:
+ *
+ * <remoteFrames1:x,y,angle|x,y,angle|x,y,angle>
+ * <remoteFrames2:x,y,angle|x,y,angle|x,y,angle>
+ * <remoteFrames3:x,y,angle|x,y,angle|x,y,angle>
+ * <remoteFrames4:x,y,angle|x,y,angle|x,y,angle>
+ * <remoteFrames6:x,y,angle|x,y,angle|x,y,angle>
+ * <remoteFrames7:x,y,angle|x,y,angle|x,y,angle>
+ * <remoteFrames8:x,y,angle|x,y,angle|x,y,angle>
+ * <remoteFrames9:x,y,angle|x,y,angle|x,y,angle>
+ *
+ * Direction numbers:
+ * - 1 = down-left diagonal shot
+ * - 2 = down shot
+ * - 3 = down-right diagonal shot
+ * - 4 = left shot
+ * - 6 = right shot
+ * - 7 = up-left diagonal shot
+ * - 8 = up shot
+ * - 9 = up-right diagonal shot
+ *
+ * Each remoteFrames tag has 3 frames:
+ * - Frame 1 uses Bow_01.
+ * - Frame 2 uses Bow_01a.
+ * - Frame 3 uses Bow_01.
+ *
+ * Each frame is:
+ * x,y,angle
+ *
+ * Example:
+ *
+ * <remoteFrames6:16,-27,-20|21,-27,0|16,-27,20>
+ *
+ * Remote weapon image rules:
+ * - Bow_01  = normal / undrawn image.
+ * - Bow_01a = drawn image.
+ * - The "a" suffix is automatic.
+ * - Remote overlay is visible only during the remote attack action.
+ * - Rotation is controlled directly by each remote frame angle.
+ * - Mirroring is not forced; the bow angle should be tuned per direction.
+ * - Frame 0: Bow_01 at fixed offset.
+ * - Frame 1: Bow_01a moves forward slightly.
+ * - Frame 2: Bow_01 returns to fixed offset.
+ * - After the action, the overlay hides.
+ *
+ * Remote image files are loaded from img/Actions/.
+ *
+ * ============================================================================
+ * Skill Note Tags
+ * ============================================================================
+ *
+ * Weapon action trigger:
+ *
+ * <attackObject:slash>
+ * <attackObject:arrow>
+ * <attackObject:punch>
+ *
+ * User-front animation:
+ *
+ * <Animation:X>
+ *
+ * Skill sound effect:
+ *
+ * Short form:
+ * <se:Slash1>
+ *
+ * Full form:
+ * <se:Slash1,90,100,0>
+ *
+ * Format:
+ * <se:fileName,volume,pitch,pan>
+ *
+ * Default values:
+ * - volume: 90
+ * - pitch: 100
+ * - pan: 0
+ *
+ * ============================================================================
+ * Default Behavior
+ * ============================================================================
+ * - If no weapon is equipped, $Player_Punch is used as the default character
+ *   motion name.
+ * - If no valid motion / swing / remote weapon note exists, no weapon action
+ *   is played.
+ *
+ * ============================================================================
+ * CF-BattleSystem Core Plugins
+ * ============================================================================
+ * Recommended order:
+ * 1. Enemy Entity Plugin             CF_Enemy.js
+ * 2. Attack Processing Plugin        CF_Attack.js
+ * 3. Attack Object Handler           CF_AttackObject.js
+ * 4. Player Weapon Motion Plugin     CF_PlayerActionMotion.js
+ * 5. Skill Casting Link Plugin       CF_PlayerSkillCast.js
+ * 6. Skill Hotbar UI Plugin          CF_BattleSkill_UI.js
+ * 7. Enemy Sight / Aggro Plugin      CF_Eventsight.js
+ * 8. Enemy Loot Plugin               CF_EnemyLoot.js
+ *
+ * Optional support plugins:
+ * - Map HP / MP UI                   CF_HP.js
+ * - Bow arrow dependency extension   CF_BowAmmoSystem.js
+ * - Equipment visual system          CF_Equipment.js
+ * - Position adjustment helper       CF_SetPosition.js
+ * - Loot log helper                  CF_LootlogScroll.js
+ * - Item hotbar helper               CF_MapToolBar
+ * - Battle combo display             CF_BattleComboSystem
+ *
+ * ============================================================================
+ * Copyright
+ * ============================================================================
+ * This plugin is for:
+ * - Learning use.
+ * - Non-commercial use.
+ *
+ * Commercial use requires permission from the author.
+ * ============================================================================
+ */
+
+(function() {
+
+    "use strict";
+
+    //=========================================================================
+    // Basic helpers
+    //=========================================================================
+
+    function cfPamToNumber(value, defaultValue) {
+        var n = Number(value);
+        return Number.isNaN(n) ? defaultValue : n;
+    }
+
+    function cfPamReadPairTag(note, tagName, defaultX, defaultY) {
+        var regexp = new RegExp("<" + tagName + ":\\s*([+-]?\\d+(?:\\.\\d+)?)\\s*,\\s*([+-]?\\d+(?:\\.\\d+)?)\\s*>", "i");
+        var match = String(note || "").match(regexp);
+
+        if (!match) {
+            return { x: defaultX, y: defaultY };
+        }
+
+        return {
+            x: cfPamToNumber(match[1], defaultX),
+            y: cfPamToNumber(match[2], defaultY)
+        };
+    }
+
+    function cfPamReadNumberTag(note, tagName, defaultValue) {
+        var regexp = new RegExp("<" + tagName + ":\\s*([+-]?\\d+(?:\\.\\d+)?)\\s*>", "i");
+        var match = String(note || "").match(regexp);
+        return match ? cfPamToNumber(match[1], defaultValue) : defaultValue;
+    }
+
+    function cfPamReadTextTag(note, tagName, defaultValue) {
+        var regexp = new RegExp("<" + tagName + ":\\s*([^>]+)>", "i");
+        var match = String(note || "").match(regexp);
+        return match ? String(match[1] || "").trim().toLowerCase() : defaultValue;
+    }
+
+    function cfPamReadFrameListTag(note, tagName, defaultFrames) {
+        var regexp = new RegExp("<" + tagName + ":([^>]+)>", "i");
+        var match = String(note || "").match(regexp);
+
+        if (!match) {
+            return defaultFrames;
+        }
+
+        var parts = String(match[1] || "").split("|");
+        var frames = [];
+
+        for (var i = 0; i < parts.length; i++) {
+            var nums = parts[i].split(",");
+            if (nums.length < 3) continue;
+
+            frames.push({
+                x: cfPamToNumber(nums[0], 0),
+                y: cfPamToNumber(nums[1], 0),
+                angle: cfPamToNumber(nums[2], 0)
+            });
+        }
+
+        return frames.length >= 3 ? frames.slice(0, 3) : defaultFrames;
+    }
+
+    function cfPamReadRemoteFrameListTag(note, tagName, defaultFrames) {
+        var regexp = new RegExp("<" + tagName + ":([^>]+)>", "i");
+        var match = String(note || "").match(regexp);
+
+        if (!match) {
+            return defaultFrames;
+        }
+
+        var parts = String(match[1] || "").split("|");
+        var frames = [];
+
+        for (var i = 0; i < parts.length; i++) {
+            var nums = parts[i].split(",");
+            if (nums.length < 3) continue;
+
+            frames.push({
+                x: cfPamToNumber(nums[0], 0),
+                y: cfPamToNumber(nums[1], 0),
+                angle: cfPamToNumber(nums[2], 0)
+            });
+        }
+
+        return frames.length >= 3 ? frames.slice(0, 3) : defaultFrames;
+    }
+
+
+    function cfPamDirection8(character) {
+        if (!character) return 2;
+
+        if (typeof character.cfInteractionDirection === "function") {
+            return character.cfInteractionDirection() || character.direction();
+        }
+
+        return character.direction ? character.direction() : 2;
+    }
+
+    function cfPamRemoteVector(direction) {
+        var diag = Math.SQRT1_2 || (1 / Math.sqrt(2));
+
+        switch (direction) {
+            case 1: return { x: -diag, y:  diag };
+            case 2: return { x: 0,     y:  1 };
+            case 3: return { x:  diag, y:  diag };
+            case 4: return { x: -1,    y:  0 };
+            case 6: return { x:  1,    y:  0 };
+            case 7: return { x: -diag, y: -diag };
+            case 8: return { x: 0,     y: -1 };
+            case 9: return { x:  diag, y: -diag };
+            default: return { x: 0, y: 1 };
+        }
+    }
+
+    function cfPamVisualDirection4(direction) {
+        switch (direction) {
+            case 1:
+            case 2:
+            case 3:
+                return 2;
+            case 4:
+                return 4;
+            case 6:
+                return 6;
+            case 7:
+            case 8:
+            case 9:
+                return 8;
+            default:
+                return 2;
+        }
+    }
+
+function cfPamRemoteImageBehindCharacter(frame) {
+    if (!frame) return false;
+
+    var dir = Number(frame.direction || 2);
+
+    return dir === 4 || dir === 7 || dir === 8 || dir === 9;
+}
+
+function cfPamSwingImageBehindCharacter(character) {
+    if (!character) return false;
+
+    var dir = cfPamDirection8(character);
+
+    // 近战 8方向层级：
+    // 4 左、7 左上、8 上、9 右上：武器图在人物下面
+    // 1 左下、2 下、3 右下、6 右：武器图在人物上面
+    return dir === 4 || dir === 7 || dir === 8 || dir === 9;
+}
+
+    function cfPamLerp(a, b, t) {
+        return a + (b - a) * t;
+    }
+
+    function cfPamLerpAngle(a, b, t) {
+        return a + (b - a) * t;
+    }
+
+    //=========================================================================
+    // Game_Player setup
+    //=========================================================================
+
+    var _Game_Player_initMembers = Game_Player.prototype.initMembers;
+    Game_Player.prototype.initMembers = function() {
+        _Game_Player_initMembers.call(this);
+
+        this._motionPlaying = false;
+        this._motionWait = 0;
+        this._motionFrame = 0;
+        this._motionCharacterName = "";
+        this._motionCharacterIndex = 0;
+
+        this._motionTotalFrames = 3;
+        this._motionSpeed = 4;
+
+        this._savedCharacterName = "";
+        this._savedCharacterIndex = 0;
+
+        // CF: Single-image swing weapon motion.
+        this._cfSwingMotionPlaying = false;
+        this._cfSwingWeaponName = "";
+        this._cfSwingMotionFrame = 0;
+        this._cfSwingMotionWait = 0;
+        this._cfSwingMotionSpeed = 4;
+
+        // CF: Remote weapon overlay motion.
+        this._cfRemoteMotionPlaying = false;
+        this._cfRemoteWeaponName = "";
+        this._cfRemoteMotionFrame = 0;
+        this._cfRemoteMotionWait = 0;
+        this._cfRemoteMotionSpeed = 6;
+        this._cfRemoteReleaseFrame = 2;
+
+        this._cfCurrentMotionDelayFrames = 0;
+        this._pendingAttackObjects = [];
+    };
+
+    Game_Player.prototype.playerBattler = Game_Player.prototype.playerBattler || function() {
+        return $gameParty.leader();
+    };
+
+    Game_Player.prototype.currentWeapon = function() {
+        var actor = this.playerBattler();
+        if (!actor) return null;
+
+        var weapons = actor.weapons();
+        return (weapons && weapons.length > 0) ? weapons[0] : null;
+    };
+
+    Game_Player.prototype.weaponMotionName = function() {
+        var weapon = this.currentWeapon();
+
+        if (!weapon) {
+            return "$Player_Punch";
+        }
+
+        var note = weapon.note || "";
+        var match = note.match(/<motion:([^>]+)>/i);
+        return match ? String(match[1]).trim() : "";
+    };
+
+    Game_Player.prototype.swingWeaponName = function() {
+        var weapon = this.currentWeapon();
+        if (!weapon) return "";
+
+        var note = weapon.note || "";
+        var match = note.match(/<swingWeapon:([^>]+)>/i);
+        return match ? String(match[1]).trim() : "";
+    };
+
+    Game_Player.prototype.remoteWeaponName = function() {
+        var weapon = this.currentWeapon();
+        if (!weapon) return "";
+
+        var note = weapon.note || "";
+        var match = note.match(/<(?:remoteWeapon|rangedWeapon|bowWeapon):([^>]+)>/i);
+        return match ? String(match[1]).trim() : "";
+    };
+
+    Game_Player.prototype.remoteWeaponDrawName = function() {
+        var baseName = this.remoteWeaponName ? this.remoteWeaponName() : "";
+        return baseName ? baseName + "a" : "";
+    };
+
+    Game_Player.prototype.cfSwingWeaponNote = function() {
+        var weapon = this.currentWeapon ? this.currentWeapon() : null;
+        return weapon ? String(weapon.note || "") : "";
+    };
+
+    Game_Player.prototype.cfRemoteWeaponNote = function() {
+        var weapon = this.currentWeapon ? this.currentWeapon() : null;
+        return weapon ? String(weapon.note || "") : "";
+    };
+
+    Game_Player.prototype.cfSwingWeaponHandle = function() {
+        return cfPamReadPairTag(this.cfSwingWeaponNote(), "swingHandle", 38, 38);
+    };
+
+    Game_Player.prototype.cfRemoteWeaponHandle = function() {
+        return cfPamReadPairTag(this.cfRemoteWeaponNote(), "remoteHandle", 24, 24);
+    };
+
+    Game_Player.prototype.canPlaySwingWeaponMotion = function() {
+        return !!this.swingWeaponName();
+    };
+
+    Game_Player.prototype.canPlayRemoteWeaponMotion = function() {
+        return !!this.remoteWeaponName();
+    };
+
+    Game_Player.prototype.isRemoteWeaponSkill = function(skill) {
+        if (!skill) return false;
+        return /<attackObject:\s*arrow\s*>/i.test(skill.note || "");
+    };
+
+    Game_Player.prototype.canPlayWeaponMotion = function(skill) {
+        if (skill && this.isRemoteWeaponSkill(skill) && this.canPlayRemoteWeaponMotion()) {
+            return true;
+        }
+
+        return this.canPlaySwingWeaponMotion() || !!this.weaponMotionName();
+    };
+
+    Game_Player.prototype.skillNeedsWeaponMotion = function(skill) {
+        if (!skill) return false;
+        if (!this.canPlayWeaponMotion(skill)) return false;
+
+        var note = skill.note || "";
+
+        if (/<attackObject:\s*slash\s*>/i.test(note)) return true;
+        if (/<attackObject:\s*arrow\s*>/i.test(note)) return true;
+        if (/<attackObject:\s*punch\s*>/i.test(note)) return true;
+
+        return false;
+    };
+
+    //=========================================================================
+    // Weapon motion control
+    //=========================================================================
+
+    Game_Player.prototype.startWeaponMotion = function(skill) {
+        if (this._motionPlaying) return false;
+
+        this._cfCurrentMotionDelayFrames = 0;
+
+        if (this.isRemoteWeaponSkill(skill) && this.canPlayRemoteWeaponMotion()) {
+            return this.startRemoteWeaponMotion();
+        }
+
+        if (this.canPlaySwingWeaponMotion()) {
+            return this.startSwingWeaponMotion();
+        }
+
+        var motionName = this.weaponMotionName();
+        if (!motionName) return false;
+
+        this._savedCharacterName = this.characterName();
+        this._savedCharacterIndex = this.characterIndex();
+
+        this._motionPlaying = true;
+        this._motionFrame = 0;
+        this._motionWait = this._motionSpeed;
+        this._cfCurrentMotionDelayFrames = this._motionTotalFrames * this._motionSpeed;
+
+        this._motionCharacterName = motionName;
+        this._motionCharacterIndex = 0;
+
+        this.setImage(this._motionCharacterName, this._motionCharacterIndex);
+        this.setPattern(0);
+        return true;
+    };
+
+    Game_Player.prototype.startSwingWeaponMotion = function() {
+        var weaponName = this.swingWeaponName();
+        if (!weaponName) return false;
+
+        this._motionPlaying = true;
+        this._cfSwingMotionPlaying = true;
+        this._cfSwingWeaponName = weaponName;
+        this._cfSwingMotionFrame = 0;
+        this._cfSwingMotionWait = this._cfSwingMotionSpeed;
+        this._cfCurrentMotionDelayFrames = this._motionTotalFrames * this._cfSwingMotionSpeed;
+
+        // Play the player's original walking sprite as a simple 3-frame attack motion.
+        this.setPattern(0);
+
+        // Hide optional static equipment weapon layer while the swing sprite is playing.
+        if (this.lockWeaponLayerHidden) this.lockWeaponLayerHidden();
+        if (this.hideWeaponLayerTemp) this.hideWeaponLayerTemp();
+
+        return true;
+    };
+
+    Game_Player.prototype.startRemoteWeaponMotion = function() {
+        var weaponName = this.remoteWeaponName();
+        if (!weaponName) return false;
+
+        this._motionPlaying = true;
+        this._cfRemoteMotionPlaying = true;
+        this._cfRemoteWeaponName = weaponName;
+        this._cfRemoteMotionFrame = 0;
+        this._cfRemoteMotionWait = this._cfRemoteMotionSpeed;
+        this._cfCurrentMotionDelayFrames = this._cfRemoteReleaseFrame * this._cfRemoteMotionSpeed;
+
+        // Keep the player sprite stable; the remote weapon overlay handles the draw pose.
+        this.setPattern(0);
+
+        if (this.lockWeaponLayerHidden) this.lockWeaponLayerHidden();
+        if (this.hideWeaponLayerTemp) this.hideWeaponLayerTemp();
+
+        return true;
+    };
+
+    Game_Player.prototype.endWeaponMotion = function() {
+        if (!this._motionPlaying) return;
+
+        if (this._cfRemoteMotionPlaying) {
+            this._cfRemoteMotionPlaying = false;
+            this._cfRemoteWeaponName = "";
+            this._cfRemoteMotionFrame = 0;
+            this._cfRemoteMotionWait = 0;
+            this._motionPlaying = false;
+            this._motionWait = 0;
+            this._motionFrame = 0;
+            this._cfCurrentMotionDelayFrames = 0;
+            this.setPattern(1);
+
+            if (this.unlockWeaponLayerHidden) this.unlockWeaponLayerHidden();
+            if (this.showWeaponLayerTemp) this.showWeaponLayerTemp();
+            return;
+        }
+
+        if (this._cfSwingMotionPlaying) {
+            this._cfSwingMotionPlaying = false;
+            this._cfSwingWeaponName = "";
+            this._cfSwingMotionFrame = 0;
+            this._cfSwingMotionWait = 0;
+            this._motionPlaying = false;
+            this._motionWait = 0;
+            this._motionFrame = 0;
+            this._cfCurrentMotionDelayFrames = 0;
+            this.setPattern(1);
+
+            if (this.unlockWeaponLayerHidden) this.unlockWeaponLayerHidden();
+            if (this.showWeaponLayerTemp) this.showWeaponLayerTemp();
+            return;
+        }
+
+        this._motionPlaying = false;
+        this._motionWait = 0;
+        this._motionFrame = 0;
+        this._cfCurrentMotionDelayFrames = 0;
+
+        this.setImage(
+            this._savedCharacterName || this.characterName(),
+            this._savedCharacterIndex || 0
+        );
+
+        this.setPattern(1);
+    };
+
+    Game_Player.prototype.updateWeaponMotion = function() {
+        if (!this._motionPlaying) return;
+
+        if (this._cfRemoteMotionPlaying) {
+            if (this._cfRemoteMotionWait > 0) {
+                this._cfRemoteMotionWait--;
+                return;
+            }
+
+            this._cfRemoteMotionWait = this._cfRemoteMotionSpeed;
+            this._cfRemoteMotionFrame++;
+
+            if (this._cfRemoteMotionFrame >= this._motionTotalFrames) {
+                this.endWeaponMotion();
+                return;
+            }
+
+            this.setPattern(Math.min(this._cfRemoteMotionFrame, 1));
+            return;
+        }
+
+        if (this._cfSwingMotionPlaying) {
+            if (this._cfSwingMotionWait > 0) {
+                this._cfSwingMotionWait--;
+                return;
+            }
+
+            this._cfSwingMotionWait = this._cfSwingMotionSpeed;
+            this._cfSwingMotionFrame++;
+
+            if (this._cfSwingMotionFrame >= this._motionTotalFrames) {
+                this.endWeaponMotion();
+                return;
+            }
+
+            // Keep the player's original walking graphic, but play its 3 patterns.
+            this.setPattern(this._cfSwingMotionFrame);
+            return;
+        }
+
+        if (this._motionWait > 0) {
+            this._motionWait--;
+            return;
+        }
+
+        this._motionWait = this._motionSpeed;
+        this._motionFrame++;
+
+        if (this._motionFrame >= this._motionTotalFrames) {
+            this.endWeaponMotion();
+            return;
+        }
+
+        this.setPattern(this._motionFrame);
+    };
+
+    //=========================================================================
+    // Skill SE and attack object queue
+    //=========================================================================
+
+    Game_Player.prototype.skillCastSeData = function(skill) {
+        if (!skill) return null;
+
+        var note = skill.note || "";
+        var fullMatch = note.match(/<se:([^,>]+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(-?\d+)\s*>/i);
+
+        if (fullMatch) {
+            return {
+                name: String(fullMatch[1]).trim(),
+                volume: Number(fullMatch[2] || 90),
+                pitch: Number(fullMatch[3] || 100),
+                pan: Number(fullMatch[4] || 0)
+            };
+        }
+
+        var simpleMatch = note.match(/<se:([^>]+)>/i);
+
+        if (simpleMatch) {
+            return {
+                name: String(simpleMatch[1]).trim(),
+                volume: 90,
+                pitch: 100,
+                pan: 0
+            };
+        }
+
+        return null;
+    };
+
+    Game_Player.prototype.playSkillCastSe = function(skill) {
+        var se = this.skillCastSeData ? this.skillCastSeData(skill) : null;
+        if (!se || !se.name) return false;
+
+        AudioManager.playSe({
+            name: se.name,
+            volume: se.volume != null ? se.volume : 90,
+            pitch: se.pitch != null ? se.pitch : 100,
+            pan: se.pan != null ? se.pan : 0
+        });
+
+        return true;
+    };
+
+    Game_Player.prototype.motionDelayFrames = function() {
+        if (this._cfCurrentMotionDelayFrames > 0) {
+            return this._cfCurrentMotionDelayFrames;
+        }
+
+        return this._motionTotalFrames * this._motionSpeed;
+    };
+
+    Game_Player.prototype.updatePendingAttackObjects = function() {
+        if (!this._pendingAttackObjects || this._pendingAttackObjects.length === 0) return;
+
+        for (var i = this._pendingAttackObjects.length - 1; i >= 0; i--) {
+            var item = this._pendingAttackObjects[i];
+            if (!item) continue;
+
+            item.wait--;
+
+            if (item.wait > 0) continue;
+
+            if (this.spawnQueuedAttackObject) {
+                this.spawnQueuedAttackObject(item.skill, item.type);
+            }
+
+            this._pendingAttackObjects.splice(i, 1);
+        }
+    };
+
+    Game_Player.prototype.queueAttackObject = function(skill, type) {
+        if (!skill || !type) return false;
+
+        if (!this._pendingAttackObjects) {
+            this._pendingAttackObjects = [];
+        }
+
+        var wait = 0;
+
+        if (this.skillCastTime) {
+            wait += this.skillCastTime(skill);
+        }
+
+        if (this.playCastStartAnimation) {
+            this.playCastStartAnimation(skill);
+        }
+
+        var playedSe = false;
+
+        if (this.skillNeedsWeaponMotion(skill)) {
+            this.startWeaponMotion(skill);
+            this.playSkillCastSe(skill);
+            playedSe = true;
+            wait += this.motionDelayFrames();
+        }
+
+        if (!playedSe) {
+            this.playSkillCastSe(skill);
+        }
+
+        this._pendingAttackObjects.push({
+            skill: skill,
+            type: type,
+            wait: wait
+        });
+
+        return true;
+    };
+
+    //=========================================================================
+    // 8-direction interaction memory
+    //=========================================================================
+
+    Game_Player.prototype.updateCFPlayerDirection8 = function() {
+        if (!Input || !Input.dir8) return;
+
+        var dir = Number(Input.dir8 || 0);
+
+        if ([1, 2, 3, 4, 6, 7, 8, 9].indexOf(dir) >= 0) {
+            this._cfMoveDir8 = dir;
+        }
+    };
+
+    if (!Game_CharacterBase.prototype.cfInteractionDirection) {
+        Game_CharacterBase.prototype.cfInteractionDirection = function() {
+            return this._cfMoveDir8 || this.direction();
+        };
+    }
+
+    var _Game_Player_update = Game_Player.prototype.update;
+    Game_Player.prototype.update = function(sceneActive) {
+        this.updateCFPlayerDirection8();
+        _Game_Player_update.call(this, sceneActive);
+        this.updateCFPlayerDirection8();
+        this.updateWeaponMotion();
+        this.updatePendingAttackObjects();
+    };
+
+    //=========================================================================
+    // Single-image swing weapon display
+    //=========================================================================
+
+Game_Player.prototype.cfSwingWeaponFrames = function(direction) {
+    var note = this.cfSwingWeaponNote();
+    var dir = Number(direction || cfPamDirection8(this) || 2);
+
+    // CF_SWING_WEAPON_8_DIR_EDIT_HERE
+    // 近战 8方向默认位置/角度。
+    // 每个方向三行，对应三帧。
+    var defaults = {
+        // 1 = 左下
+        1: [
+            { x: -8, y: -35, angle:   30 },
+            { x: -7, y: -37, angle:  -40 },
+            { x: -6, y: -39, angle: -110 }
+        ],
+
+        // 2 = 下
+        2: [
+            { x: -8, y: -35, angle:  0 },
+            { x: -7, y: -37, angle: -80 },
+            { x: -6, y: -39, angle: -160 }
+        ],
+
+        // 3 = 右下
+        3: [
+            { x: -8, y: -35, angle:   -30 },
+            { x: -7, y: -37, angle:  -100 },
+            { x: -6, y: -39, angle:  -190 }
+        ],
+
+        // 4 = 左
+        4: [
+            { x: -3, y: -42, angle:   60 },
+            { x: -2, y: -40, angle:  -10 },
+            { x: -1, y: -38, angle:  -80 }
+        ],
+
+        // 6 = 右
+        6: [
+            { x: 3, y: -39, angle:  20 },
+            { x: 2, y: -37, angle:  90 },
+            { x: 1, y: -35, angle: 160 }
+        ],
+
+        // 7 = 左上
+        7: [
+            { x: -8, y: -43, angle:  130 },
+            { x: -7, y: -41, angle:   60 },
+            { x: -6, y: -39, angle:  -10 }
+        ],
+
+        // 8 = 上
+        8: [
+            { x:  8, y: -39, angle: 160 },
+            { x:  7, y: -41, angle:  90 },
+            { x:  6, y: -43, angle:  20 }
+        ],
+
+        // 9 = 右上
+        9: [
+            { x: 8, y: -43, angle:  190 },
+            { x: 7, y: -41, angle:  120 },
+            { x: 6, y: -39, angle:   50 }
+        ]
+    };
+
+    return cfPamReadFrameListTag(
+        note,
+        "swingFrames" + String(dir),
+        defaults[dir] || defaults[2]
+    );
+};
+
+    Game_Player.prototype.cfCurrentSwingWeaponFrame = function() {
+        if (!this._cfSwingMotionPlaying) return null;
+
+        var frames = this.cfSwingWeaponFrames(cfPamDirection8(this));
+        if (!frames || frames.length <= 0) return null;
+
+        var index = Math.max(0, Math.min(frames.length - 1, this._cfSwingMotionFrame || 0));
+        var current = frames[index];
+
+        if (index >= frames.length - 1) {
+            return current;
+        }
+
+        var next = frames[index + 1];
+        var speed = Math.max(1, this._cfSwingMotionSpeed || 1);
+        var wait = Math.max(0, Math.min(speed, this._cfSwingMotionWait || 0));
+        var t = 1 - (wait / speed);
+
+        return {
+            x: cfPamLerp(current.x, next.x, t),
+            y: cfPamLerp(current.y, next.y, t),
+            angle: cfPamLerpAngle(current.angle, next.angle, t)
+        };
+    };
+
+    function Sprite_CFSwingWeapon() {
+        this.initialize.apply(this, arguments);
+    }
+
+    Sprite_CFSwingWeapon.prototype = Object.create(Sprite.prototype);
+    Sprite_CFSwingWeapon.prototype.constructor = Sprite_CFSwingWeapon;
+
+    Sprite_CFSwingWeapon.prototype.initialize = function(character) {
+        Sprite.prototype.initialize.call(this);
+        this._character = character;
+        this._weaponName = "";
+        this.anchor.x = 0.5;
+        this.anchor.y = 0.5;
+        this.visible = false;
+    };
+
+    Sprite_CFSwingWeapon.prototype.update = function() {
+        Sprite.prototype.update.call(this);
+        this.updateBitmap();
+        this.updateFrameTransform();
+    };
+
+    Sprite_CFSwingWeapon.prototype.updateBitmap = function() {
+        var name = this._character && this._character._cfSwingWeaponName
+            ? this._character._cfSwingWeaponName
+            : "";
+
+        if (!name) {
+            this.visible = false;
+            return;
+        }
+
+        if (this._weaponName !== name) {
+            this._weaponName = name;
+            this.bitmap = ImageManager.loadBitmap("img/Actions/", name);
+        }
+    };
+
+    Sprite_CFSwingWeapon.prototype.updateFrameTransform = function() {
+        var player = this._character;
+        var owner = this._cfOwnerSprite;
+
+        if (!player || !owner || !player._cfSwingMotionPlaying || !this.bitmap || !this.bitmap.isReady()) {
+            this.visible = false;
+            return;
+        }
+
+        var frame = player.cfCurrentSwingWeaponFrame ? player.cfCurrentSwingWeaponFrame() : null;
+
+        if (!frame) {
+            this.visible = false;
+            return;
+        }
+
+        var handle = player.cfSwingWeaponHandle ? player.cfSwingWeaponHandle() : { x: 38, y: 38 };
+        var bw = Math.max(1, this.bitmap.width || 48);
+        var bh = Math.max(1, this.bitmap.height || 48);
+
+        this.anchor.x = handle.x / bw;
+        this.anchor.y = handle.y / bh;
+
+        this.x = owner.x + frame.x;
+        this.y = owner.y + frame.y;
+        this.scale.x = owner.scale.x;
+        this.scale.y = owner.scale.y;
+        this.opacity = owner.opacity;
+        this.rotation = frame.angle * Math.PI / 180;
+        this.visible = true;
+    };
+
+    var _Sprite_Character_update_CFSwingWeapon = Sprite_Character.prototype.update;
+    Sprite_Character.prototype.update = function() {
+        _Sprite_Character_update_CFSwingWeapon.call(this);
+        this.updateCFSwingWeaponSprite();
+    };
+
+    Sprite_Character.prototype.updateCFSwingWeaponSprite = function() {
+        if (this._character !== $gamePlayer) return;
+        if (!this.parent) return;
+
+        if (!this._cfSwingWeaponSprite) {
+            this._cfSwingWeaponSprite = new Sprite_CFSwingWeapon($gamePlayer);
+            this._cfSwingWeaponSprite._cfOwnerSprite = this;
+        }
+
+        var imageSprite = this._cfSwingWeaponSprite;
+        imageSprite._cfOwnerSprite = this;
+
+        var parent = this.parent;
+        var behind = cfPamSwingImageBehindCharacter($gamePlayer);
+
+        if (imageSprite.parent) {
+            imageSprite.parent.removeChild(imageSprite);
+        }
+
+        var playerIndex = parent.getChildIndex(this);
+
+        if (behind) {
+            parent.addChildAt(imageSprite, playerIndex);
+        } else {
+            parent.addChildAt(imageSprite, Math.min(playerIndex + 1, parent.children.length));
+        }
+    };
+
+    //=========================================================================
+    // Remote weapon overlay display
+    //=========================================================================
+
+    //=========================================================================
+    // CF_REMOTE_BOW_EDIT_HERE
+    // 改弓的位置和角度就搜这个：CF_REMOTE_BOW_EDIT_HERE
+    // 这里只改 x / y / angle 数字。
+    // 每个方向三行：
+    // 第1行 = Bow_01
+    // 第2行 = Bow_01a
+    // 第3行 = Bow_01
+    //=========================================================================
+    Game_Player.prototype.cfRemoteWeaponFrames = function(direction) {
+        var note = this.cfRemoteWeaponNote();
+        var dir = Number(direction || cfPamDirection8(this) || 2);
+
+        var defaults = {
+            1: [
+                { x: -15, y: -40, angle: 45 },
+                { x: -10, y: -40, angle: 45 },
+                { x: -15, y: -40, angle: 45 }
+            ],
+
+            2: [
+                { x: 0, y: -30, angle: 0 },
+                { x: 0, y: -25, angle: 0 },
+                { x: 0, y: -30, angle: 0 }
+            ],
+
+            3: [
+                { x: 10, y: -40, angle: -45 },
+                { x: 15, y: -40, angle: -45 },
+                { x: 10, y: -40, angle: -45 }
+            ],
+
+            4: [
+                { x: -15, y: -40, angle: 90 },
+                { x: -10, y: -40, angle: 90 },
+                { x: -15, y: -40, angle: 90 }
+            ],
+
+            6: [
+                { x: 10, y: -40, angle: -90 },
+                { x: 15, y: -40, angle: -90 },
+                { x: 10, y: -40, angle: -90 }
+            ],
+
+            7: [
+                { x:  -5, y: -50, angle: 135 },
+                { x: -10, y: -53, angle: 135 },
+                { x:  -5, y: -50, angle: 135 }
+            ],
+
+            8: [
+                { x: 0, y: -50, angle: 180 },
+                { x: 0, y: -55, angle: 180 },
+                { x: 0, y: -50, angle: 180 }
+            ],
+
+            9: [
+                { x:  5, y: -50, angle: -135 },
+                { x: 10, y: -53, angle: -135 },
+                { x:  5, y: -50, angle: -135 }
+            ]
+        };
+
+        return cfPamReadRemoteFrameListTag(
+            note,
+            "remoteFrames" + String(dir),
+            defaults[dir] || defaults[2]
+        );
+    };
+
+    // ↑↑↑ 上面这一整块就是弓 8 方向默认位置/角度配置。
+    // 你看到 cfCurrentRemoteWeaponFrame 时，往上看就是。
+    // 搜 CF_REMOTE_BOW_EDIT_HERE 也能直接定位。
+
+    Game_Player.prototype.cfCurrentRemoteWeaponFrame = function() {
+        var baseName = this.remoteWeaponName ? this.remoteWeaponName() : "";
+        if (!baseName) return null;
+
+        // CF: Remote weapon overlay must never stay visible outside the attack action.
+        if (!this._cfRemoteMotionPlaying) return null;
+
+        var note = this.cfRemoteWeaponNote();
+        var direction = cfPamDirection8(this);
+        var layer = cfPamReadTextTag(note, "remoteLayer", "auto");
+        var frames = this.cfRemoteWeaponFrames ? this.cfRemoteWeaponFrames(direction) : null;
+
+        if (!frames || frames.length < 3) return null;
+
+        var frameIndex = Math.max(0, Math.min(2, this._cfRemoteMotionFrame || 0));
+        var pos = frames[frameIndex] || frames[0];
+        var imageName = frameIndex === 1
+            ? (this.remoteWeaponDrawName ? this.remoteWeaponDrawName() : (baseName + "a"))
+            : baseName;
+
+        return {
+            imageName: imageName,
+            x: pos.x,
+            y: pos.y,
+            angle: pos.angle || 0,
+            scale: 1,
+            direction: direction,
+            layer: layer
+        };
+    };
+
+    function Sprite_CFRemoteWeapon() {
+        this.initialize.apply(this, arguments);
+    }
+
+    Sprite_CFRemoteWeapon.prototype = Object.create(Sprite.prototype);
+    Sprite_CFRemoteWeapon.prototype.constructor = Sprite_CFRemoteWeapon;
+
+    Sprite_CFRemoteWeapon.prototype.initialize = function(character) {
+        Sprite.prototype.initialize.call(this);
+        this._character = character;
+        this._weaponName = "";
+        this.anchor.x = 0.5;
+        this.anchor.y = 0.5;
+        this.visible = false;
+    };
+
+    Sprite_CFRemoteWeapon.prototype.update = function() {
+        Sprite.prototype.update.call(this);
+        this.updateBitmap();
+        this.updateFrameTransform();
+    };
+
+    Sprite_CFRemoteWeapon.prototype.updateBitmap = function() {
+        var frame = this._character && this._character.cfCurrentRemoteWeaponFrame
+            ? this._character.cfCurrentRemoteWeaponFrame()
+            : null;
+        var name = frame ? frame.imageName : "";
+
+        if (!name) {
+            this.visible = false;
+            return;
+        }
+
+        if (this._weaponName !== name) {
+            this._weaponName = name;
+            this.bitmap = ImageManager.loadBitmap("img/Actions/", name);
+        }
+    };
+
+    Sprite_CFRemoteWeapon.prototype.updateFrameTransform = function() {
+        var player = this._character;
+        var owner = this._cfOwnerSprite;
+
+        if (!player || !owner || !player._cfRemoteMotionPlaying || !this.bitmap || !this.bitmap.isReady()) {
+            this.visible = false;
+            return;
+        }
+
+        var frame = player.cfCurrentRemoteWeaponFrame ? player.cfCurrentRemoteWeaponFrame() : null;
+
+        if (!frame || player._cfSwingMotionPlaying) {
+            this.visible = false;
+            return;
+        }
+
+        var handle = player.cfRemoteWeaponHandle ? player.cfRemoteWeaponHandle() : { x: 24, y: 24 };
+        var bw = Math.max(1, this.bitmap.width || 48);
+        var bh = Math.max(1, this.bitmap.height || 48);
+
+        this.anchor.x = handle.x / bw;
+        this.anchor.y = handle.y / bh;
+
+        this.x = owner.x + frame.x;
+        this.y = owner.y + frame.y;
+
+        // CF: remote bow frame now supports per-frame angle tuning.
+        this.scale.x = owner.scale.x * (frame.scale || 1);
+        this.scale.y = owner.scale.y * (frame.scale || 1);
+        this.rotation = (frame.angle || 0) * Math.PI / 180;
+
+        this.opacity = owner.opacity;
+        this.visible = true;
+    };
+
+    var _Sprite_Character_update_CFRemoteWeapon = Sprite_Character.prototype.update;
+    Sprite_Character.prototype.update = function() {
+        _Sprite_Character_update_CFRemoteWeapon.call(this);
+        this.updateCFRemoteWeaponSprite();
+    };
+
+    Sprite_Character.prototype.updateCFRemoteWeaponSprite = function() {
+        if (this._character !== $gamePlayer) return;
+        if (!this.parent) return;
+
+        if (!this._cfRemoteWeaponSprite) {
+            this._cfRemoteWeaponSprite = new Sprite_CFRemoteWeapon($gamePlayer);
+            this._cfRemoteWeaponSprite._cfOwnerSprite = this;
+        }
+
+        var imageSprite = this._cfRemoteWeaponSprite;
+        imageSprite._cfOwnerSprite = this;
+
+        var parent = this.parent;
+        var frame = $gamePlayer.cfCurrentRemoteWeaponFrame ? $gamePlayer.cfCurrentRemoteWeaponFrame() : null;
+        var behind = cfPamRemoteImageBehindCharacter(frame);
+
+        if (imageSprite.parent) {
+            imageSprite.parent.removeChild(imageSprite);
+        }
+
+        var playerIndex = parent.getChildIndex(this);
+
+        if (behind) {
+            parent.addChildAt(imageSprite, playerIndex);
+        } else {
+            parent.addChildAt(imageSprite, Math.min(playerIndex + 1, parent.children.length));
+        }
+    };
+
+    //=========================================================================
+    // Actions folder character image loading
+    //=========================================================================
+
+    ImageManager.loadActionCharacter = function(filename) {
+        return this.loadBitmap("img/Actions/", filename);
+    };
+
+    ImageManager.isActionBigCharacter = function(filename) {
+        var name = filename || "";
+        return name.charAt(0) === "$";
+    };
+
+    var _Sprite_Character_setCharacterBitmap_CFActionPath =
+        Sprite_Character.prototype.setCharacterBitmap;
+
+    Sprite_Character.prototype.setCharacterBitmap = function() {
+        var character = this._character;
+        var name = character ? character.characterName() : "";
+
+        // Player weapon motion image -> img/Actions/.
+        if (
+            character === $gamePlayer &&
+            $gamePlayer._motionPlaying &&
+            $gamePlayer._motionCharacterName &&
+            name === $gamePlayer._motionCharacterName
+        ) {
+            this.bitmap = ImageManager.loadActionCharacter(name);
+            this._isBigCharacter = ImageManager.isActionBigCharacter(name);
+            return;
+        }
+
+        // Enemy attack motion image -> img/Actions/.
+        if (
+            character instanceof Game_Event &&
+            character._enemyMotionPlaying &&
+            character._enemyAttackCharacterName &&
+            name === character._enemyAttackCharacterName
+        ) {
+            this.bitmap = ImageManager.loadActionCharacter(name);
+            this._isBigCharacter = ImageManager.isActionBigCharacter(name);
+            return;
+        }
+
+        // All other cases still use the default img/characters/ path.
+        _Sprite_Character_setCharacterBitmap_CFActionPath.call(this);
+    };
+
+})();
