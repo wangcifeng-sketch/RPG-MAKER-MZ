@@ -1,0 +1,732 @@
+/*:
+ * @target MZ
+ * @plugindesc [地图战斗] 技能释放与武器联动系统 (v1.2)
+ * @author CFpanda
+ *
+ * @help
+ * =============================================================================
+ * ■ 插件定位
+ * =============================================================================
+ * 本插件负责【玩家地图技能释放】系统。
+ *
+ * 主要作用：
+ * - 监听玩家技能快捷键输入
+ * - 按当前武器类型读取对应的技能槽配置
+ * - 检查技能是否可释放（武器、冷却、消耗等）
+ * - 扣除技能消耗并触发技能释放流程
+ * - 显示技能名称飘字
+ * - 管理技能冷却与冷却完成提示音
+ *
+ * 本插件是“技能释放层”，主要负责“玩家按下技能键后要做什么”。
+ *
+ * 若技能需要生成刀光、箭矢、拳风等地图攻击体，
+ * 需要搭配 CF_AttackObject.js 使用。
+ *
+ * =============================================================================
+ * ■ 功能概要
+ * =============================================================================
+ * 1. 使用 Q / W / E / R / D / F 作为技能快捷键
+ * 2. 技能槽会随武器类型自动切换
+ * 3. 技能释放时可显示头顶技能名飘字
+ * 4. 支持技能冷却系统
+ * 5. 支持冷却结束提示音
+ * 6. 支持技能释放失败提示音控制
+ * 7. 支持与地图攻击体系统联动
+ *
+ * =============================================================================
+ * ■ 默认快捷键
+ * =============================================================================
+ * 本插件固定使用以下技能槽与按键对应关系：
+ *
+ *   槽位 0  -> Q
+ *   槽位 1  -> W
+ *   槽位 2  -> E
+ *   槽位 3  -> R
+ *   槽位 4  -> D
+ *   槽位 5  -> F
+ *
+ * 使用规则：
+ *
+ * 【已装备武器时】
+ * - 若该槽位已配置技能：按键后直接尝试释放技能
+ * - 若该槽位为空：尝试打开技能选择窗口
+ *
+ * 【未装备武器时】
+ * - 技能快捷键无效
+ * - 会播放取消音效
+ *
+ * =============================================================================
+ * ■ 武器联动说明
+ * =============================================================================
+ * 技能槽是按“武器类型”分别保存的。
+ *
+ * 例如：
+ * - 装备剑时，可使用一套技能槽配置
+ * - 装备弓时，可使用另一套技能槽配置
+ *
+ * 当玩家切换武器后，
+ * 插件会自动切换到该武器类型对应的技能槽内容。
+ *
+ * 这样可以实现：
+ * - 剑技能一套
+ * - 弓技能一套
+ * - 不同武器独立保存快捷技能配置
+ *
+ * =============================================================================
+ * ■ 技能释放流程
+ * =============================================================================
+ * 玩家按下技能键后，插件会依序检查：
+ *
+ * 1. 当前是否允许输入技能
+ *    - 对话中不可释放
+ *    - 事件执行中不可释放
+ *
+ * 2. 当前是否装备武器
+ *    - 没有武器则不能释放
+ *
+ * 3. 该快捷槽是否已配置技能
+ *    - 若为空则尝试打开技能选择窗口
+ *
+ * 4. 技能是否存在、是否可支付消耗MP或TP
+ *
+ * 5. 技能备注中是否设置了攻击体类型
+ *    - 若未设置 attackObject，则技能不会正常释放
+ *
+ * 6. 成功时：
+ *    - 扣除技能消耗
+ *    - 进入攻击体生成流程
+ *    - 显示技能名飘字
+ *    - 启动冷却
+ *
+ * =============================================================================
+ * ■ 技能备注标签
+ * =============================================================================
+ * 请将以下标签写在【技能数据库 → 备注】中。
+ *
+ * -----------------------------------------------------------------------------
+ * 1. 攻击体类型（必填）
+ * -----------------------------------------------------------------------------
+ * <attackObject:slash>
+ *   使用 slash 作为攻击体类型。
+ *   一般用于刀光、近战挥砍类技能。
+ *
+ * <attackObject:arrow>
+ *   使用 arrow 作为攻击体类型。
+ *   一般用于箭矢、飞行道具类技能。
+ *
+ * <attackObject:punch>
+ *   使用 punch 作为攻击体类型。
+ *   一般用于拳近距离打击类技能。
+ *
+ * 说明：
+ * - 此标签决定技能释放时生成哪种攻击体
+ * - 该标签通常为必填
+ * - 若未设置，本插件无法正确生成攻击体
+ *
+ * -----------------------------------------------------------------------------
+ * 2. 技能距离
+ * -----------------------------------------------------------------------------
+ * <range:4> (每个技能只需备注一次)
+ *   设置技能攻击距离为 4 格
+ *
+ * -----------------------------------------------------------------------------
+ * 3. 冷却时间
+ * -----------------------------------------------------------------------------
+ * <cooldown:60>
+ *   设置冷却为 60 帧（约 1 秒）
+ *
+ * <cooldown:180>
+ *   设置冷却为 180 帧（约 3 秒）
+ *
+ * 说明：
+ * - 60 帧约等于 1 秒
+ * - 冷却开始于技能成功释放后
+ *
+ * -----------------------------------------------------------------------------
+ * 4. 技能释放音效
+ * -----------------------------------------------------------------------------
+ * <se:Fire1, 90, 100, 0>
+ *   设置技能释放音效
+ *
+ * 格式说明：
+ * <se:音效名, 音量, 音调, 声像>
+ *
+ * 示例：
+ * <se:Sword1, 80, 100, 0>
+ *
+ * 说明：
+ * - 音效名需使用工程内已有音效资源
+ * - 若其他系统有调用此标签，可用于技能释放时播放音效
+ *
+ * -----------------------------------------------------------------------------
+ * 5. 普通攻击标记
+ * -----------------------------------------------------------------------------
+ * <normalAttackSkill>
+ *
+ * 作用：
+ * - 标记该技能为普通攻击类技能
+ * - 可用于关闭部分提示音表现
+ *
+ * 影响：
+ * - 冷却完成时不播放准备就绪音效
+ * - 释放失败时不播放取消音效
+ *
+ * -----------------------------------------------------------------------------
+ * 6. 冷却完成静音
+ * -----------------------------------------------------------------------------
+ * <noCooldownReadySe>
+ *
+ * 作用：
+ * - 该技能冷却结束时，不播放准备完成提示音
+ *   普通攻击所需
+ * -----------------------------------------------------------------------------
+ * 7. 释放失败静音
+ * -----------------------------------------------------------------------------
+ * <noRejectSe>
+ *
+ * 作用：
+ * - 该技能释放失败时，不播放取消音效
+ *
+ * =============================================================================
+ * ■ 推荐写法示例
+ * =============================================================================
+ * 【近战斩击技能】
+ * <attackObject:slash>
+ * <range:1>
+ * <cooldown:20>
+ *
+ * 【弓箭技能】
+ * <attackObject:arrow>
+ * <range:6>
+ * <cooldown:45>
+ *
+ * 【普通攻击技能】
+ * <attackObject:slash>
+ * <range:1>
+ * <cooldown:12>
+ * <normalAttackSkill>
+ *
+ * =============================================================================
+ * ■ 使用前提
+ * =============================================================================
+ * 使用本插件前，请确认：
+ *
+ * 1. 工程为 RPG Maker MZ
+ * 2. 玩家角色已具备地图战斗基础
+ * 3. 技能已正确配置到技能槽
+ * 4. 技能数据库备注已设置 <attackObject:...>
+ * 5. 已安装并启用 CF_AttackObject.js
+ *
+ * 若未安装攻击体插件：
+ * - 技能虽然可能扣除消耗
+ * - 但不会正常生成攻击体
+ * - 也不会完成地图碰撞伤害流程
+ *
+ * ============================================================================
+ * ■ 以下是核心战斗系统插件 
+ * ============================================================================
+ *
+ *   推荐插件顺序：
+ *   1. 敌人实体插件            CF_Enemy.js
+ *   2. 本插件                  CF_Attack.js
+ *   3. 攻击体伤害动画处理插件  CF_AttackObject.js
+ *   4. 玩家武器动作图处理插件  CF_PlayerActionMotion.js
+ *   5. 技能释放与武器联动插件  CF_PlayerSkillCast.js
+ *   6. 按键技能栏UI窗口插件    CF_BattleSkill_UI.js
+ *   7. 敌人视野仇恨和攻击设置  CF_Eventsight.js
+ *   8. 敌人掉落处理插件        CF_EnemyLoot.js
+ *
+ *      可选辅助插件:   地图UI显示玩家HP/MP插件     CF_HP.js 
+ *   (非绑定在战斗系统内的)弓的羽箭依赖扩展插件     CF_BowAmmoSystem.js
+ *      强大完美的换装系统+武器与战斗图联动插件     CF_Equipment.js
+ *      调控玩家与事件图像X,Y位置的辅助型插件       CF_SetPosition
+ *      物品获得信息提示(图标+名称)辅助型插件       CF_LootlogScroll
+ *      按键物品快捷栏   辅助型插件                 CF_MapToolBar
+ *      连击数显示 增加打击感   扩展型插件          CF_BattleComboSystem
+ *      还有许多技能与辅助型扩展插件..............
+ *
+ * =============================================================================
+ * ■ 版权说明
+ * =============================================================================
+ * 本插件仅限：
+ * ● 学习用途
+ * ● 非商业使用
+ *
+ * 禁止：
+ * ● 商业使用
+ * ● 商业需获得作者授权
+ * =============================================================================
+ */
+
+(function() {
+
+    //==================================================
+    // 1. 按键绑定
+    //==================================================
+var MAP_SKILL_SLOT_COUNT = 6;
+Input.keyMapper[81] = "skillQ";
+Input.keyMapper[87] = "skillW";
+Input.keyMapper[69] = "skillE";
+Input.keyMapper[82] = "skillR";
+Input.keyMapper[68] = "skillD";
+Input.keyMapper[70] = "skillF";
+
+    //==================================================
+    // 2. 配置
+    //==================================================
+
+var SKILL_SLOT_COLORS = [
+    "#4fc3f7",
+    "#81c784",
+    "#ffb74d",
+    "#e57373",
+    "#ba68c8",
+    "#ffd54f"
+];
+
+var SWORD_WTYPE_ID = 1;
+var BOW_WTYPE_ID   = 2;
+
+Game_Actor.prototype.mapSkillWeaponTypeId = function() {
+    var weapons = this.weapons();
+    if (!weapons || weapons.length === 0 || !weapons[0]) {
+        return 0;
+    }
+    return weapons[0].wtypeId || 0;
+};
+
+Game_Actor.prototype.initMapSkillSlotsIfNeeded = function() {
+    if (!this._mapSkillSlotsByWeapon) {
+        this._mapSkillSlotsByWeapon = {};
+    }
+
+if (!Array.isArray(this._mapSkillSlotsByWeapon[SWORD_WTYPE_ID])) {
+    this._mapSkillSlotsByWeapon[SWORD_WTYPE_ID] = Array(MAP_SKILL_SLOT_COUNT).fill(0);
+}
+
+if (!Array.isArray(this._mapSkillSlotsByWeapon[BOW_WTYPE_ID])) {
+    this._mapSkillSlotsByWeapon[BOW_WTYPE_ID] = Array(MAP_SKILL_SLOT_COUNT).fill(0);
+}
+};
+
+Game_Actor.prototype.ensureMapSkillSlots = function(wtypeId) {
+    this.initMapSkillSlotsIfNeeded();
+
+    if (!this._mapSkillSlotsByWeapon[wtypeId]) {
+        this._mapSkillSlotsByWeapon[wtypeId] = Array(MAP_SKILL_SLOT_COUNT).fill(0);
+    }
+
+    while (this._mapSkillSlotsByWeapon[wtypeId].length < MAP_SKILL_SLOT_COUNT) {
+        this._mapSkillSlotsByWeapon[wtypeId].push(0);
+    }
+
+    return this._mapSkillSlotsByWeapon[wtypeId];
+};
+
+Game_Actor.prototype.mapSkillIds = function() {
+    var wtypeId = this.mapSkillWeaponTypeId();
+    if (wtypeId <= 0) {
+        return Array(MAP_SKILL_SLOT_COUNT).fill(0);
+    }
+
+    return this.ensureMapSkillSlots(wtypeId).slice(0, MAP_SKILL_SLOT_COUNT);
+};
+
+Game_Actor.prototype.mapSkillIdAtSlot = function(slotIndex) {
+    var skillIds = this.mapSkillIds();
+    return Number(skillIds[slotIndex] || 0);
+};
+
+Game_Actor.prototype.setMapSkillAtSlot = function(slotIndex, skillId) {
+    var wtypeId = this.mapSkillWeaponTypeId();
+    if (wtypeId <= 0) return false;
+    if (slotIndex < 0 || slotIndex >= MAP_SKILL_SLOT_COUNT) return false;
+
+    var slots = this.ensureMapSkillSlots(wtypeId);
+    slots[slotIndex] = Number(skillId || 0);
+    return true;
+};
+
+Game_Actor.prototype.clearMapSkillAtSlot = function(slotIndex) {
+    return this.setMapSkillAtSlot(slotIndex, 0);
+};
+
+
+    //==================================================
+    // 4. 玩家更新：监听 QWER
+    //==================================================
+var _Game_Player_initialize = Game_Player.prototype.initialize;
+Game_Player.prototype.initialize = function() {
+    _Game_Player_initialize.call(this);
+    this._skillCooldowns = {};
+};
+
+var _Game_Player_update = Game_Player.prototype.update;
+Game_Player.prototype.update = function(sceneActive) {
+    _Game_Player_update.call(this, sceneActive);
+    this.updateSkillCooldowns();
+    this.updateSkillInput();
+};
+
+    //技能冷却
+    Game_Player.prototype.skillCooldownTime = function(skill) {
+        if (!skill) return 0;
+        const match = skill.note.match(/<cooldown:(\d+)>/i);
+        return match ? Number(match[1]) : 0;
+    };
+
+Game_Player.prototype.updateSkillCooldowns = function() {
+    if (!this._skillCooldowns) this._skillCooldowns = {};
+
+    for (var skillId in this._skillCooldowns) {
+        if (!this._skillCooldowns.hasOwnProperty(skillId)) continue;
+
+        if (this._skillCooldowns[skillId] > 0) {
+            this._skillCooldowns[skillId]--;
+
+            if (this._skillCooldowns[skillId] === 0) {
+                this.playSkillReadySe(Number(skillId));
+            }
+        }
+
+        if (this._skillCooldowns[skillId] <= 0) {
+            delete this._skillCooldowns[skillId];
+        }
+    }
+};
+
+Game_Player.prototype.canUseMapSkillByInput = function() {
+    if ($gameMessage.isBusy()) return false;
+    if ($gameMap.isEventRunning()) return false;
+    return true;
+};
+
+Game_Player.prototype.updateSkillInput = function() {
+    if (!this.canUseMapSkillByInput()) return;
+
+    if (Input.isTriggered("skillQ")) {
+        this.useMapSkillBySlot(0);
+    } else if (Input.isTriggered("skillW")) {
+        this.useMapSkillBySlot(1);
+    } else if (Input.isTriggered("skillE")) {
+        this.useMapSkillBySlot(2);
+    } else if (Input.isTriggered("skillR")) {
+        this.useMapSkillBySlot(3);
+    } else if (Input.isTriggered("skillD")) {
+        this.useMapSkillBySlot(4);
+    } else if (Input.isTriggered("skillF")) {
+        this.useMapSkillBySlot(5);
+    }
+};
+
+    //==================================================
+    // 5. 基础对象
+    //==================================================
+    Game_Player.prototype.playerBattler = function() {
+        return $gameParty.leader();
+    };
+
+    //==================================================
+    // 6. 技能距离
+    //==================================================
+    Game_Player.prototype.skillRange = function(skill) {
+        if (!skill) return 1;
+
+        var note = skill.note || "";
+        var match = note.match(/<range:(\d+)>/i);
+
+        if (match) {
+            return Math.max(1, Number(match[1]));
+        }
+
+        return 1;
+    };
+
+Game_Player.prototype.skillCooldownLeft = function(skillId) {
+    if (!this._skillCooldowns) this._skillCooldowns = {};
+    return this._skillCooldowns[skillId] || 0;
+};
+
+Game_Player.prototype.isSkillOnCooldown = function(skillId) {
+    return this.skillCooldownLeft(skillId) > 0;
+};
+
+Game_Player.prototype.startSkillCooldown = function(skillId, skill) {
+    if (!skillId || !skill) return;
+
+    if (!this._skillCooldowns) this._skillCooldowns = {};
+
+    var cd = this.skillCooldownTime(skill);
+    if (cd > 0) {
+        this._skillCooldowns[skillId] = cd;
+    }
+};
+
+    //==================================================
+    // 7. 技能槽 -> 技能ID
+    //==================================================
+Game_Player.prototype.mapSkillIdBySlot = function(slotIndex) {
+    var actor = this.playerBattler();
+    if (!actor) return 0;
+
+    var skillIds = actor.mapSkillIds ? actor.mapSkillIds() : Array(MAP_SKILL_SLOT_COUNT).fill(0);
+    var skillId = Number(skillIds[slotIndex] || 0);
+    if (skillId <= 0) return 0;
+
+    if (!actor.isLearnedSkill || !actor.isLearnedSkill(skillId)) {
+        return 0;
+    }
+
+    return skillId;
+};
+
+Game_Player.prototype.useMapSkillBySlot = function(slotIndex) {
+    var actor = this.playerBattler();
+    if (!actor) return false;
+
+    var wtypeId = actor.mapSkillWeaponTypeId ? actor.mapSkillWeaponTypeId() : 0;
+    var skillId = this.mapSkillIdBySlot(slotIndex);
+
+    // 没装备武器：不允许打开技能选择窗口
+    if (wtypeId <= 0) {
+        AudioManager.playSe({
+            name: "Cancel2",
+            volume: 30,
+            pitch: 80,
+            pan: 0
+        });
+        return false;
+    }
+
+    // 空槽：打开技能选择窗口
+    if (skillId <= 0) {
+        var scene = SceneManager._scene;
+        if (scene && scene.openPlayerSkillSelectionWindow) {
+            scene.openPlayerSkillSelectionWindow(slotIndex);
+            return true;
+        }
+        return false;
+    }
+
+    return this.useMapSkill(skillId, slotIndex);
+};
+
+    //==================================================
+    // 8. 使用技能槽技能
+    //==================================================
+Game_Player.prototype.useMapSkill = function(skillId, slotIndex) {
+    var actor = this.playerBattler();
+    if (!actor) return false;
+
+var skill = $dataSkills[skillId];
+if (!skill) return false;
+
+var needRejectSe = this.shouldPlaySkillRejectSe(skill);
+
+// CF: Block repeated casting while this skill is on cooldown.
+// This also applies to normal attack because CF_Attack calls useMapSkill(skillId, -1).
+if (this.isSkillOnCooldown && this.isSkillOnCooldown(skillId)) {
+    if (needRejectSe) {
+        AudioManager.playSe({
+            name: "Cancel2",
+            volume: 30,
+            pitch: 80,
+            pan: 0
+        });
+    }
+    return false;
+}
+
+if (!actor.canPaySkillCost(skill)) {
+    if (needRejectSe) {
+        AudioManager.playSe({
+            name: "Cancel2",
+            volume: 30,
+            pitch: 80,
+            pan: 0
+        });
+    }
+    return false;
+}
+
+    if (this._motionPlaying) {
+        return false;
+    }
+
+    if (this._pendingAttackObjects && this._pendingAttackObjects.length > 0) {
+        return false;
+    }
+
+    var type = this.skillAttackObjectType ? this.skillAttackObjectType(skill) : "";
+    if (!type) return false;
+
+    if (!actor.canPaySkillCost(skill)) {
+        if (needRejectSe) {
+            AudioManager.playSe({
+                name: "Cancel2",
+                volume: 30,
+                pitch: 80,
+                pan: 0
+            });
+        }
+        return false;
+    }
+
+    actor.paySkillCost(skill);
+
+    if (this.queueAttackObject) {
+        this.queueAttackObject(skill, type);
+    }
+
+if (slotIndex >= 0) {
+    this.showSkillNamePopup(skill, slotIndex);
+}
+
+    this.startSkillCooldown(skillId, skill);
+    return true;
+};
+
+Game_Player.prototype.playSkillReadySe = function(skillId) {
+    var skill = $dataSkills[skillId];
+    if (!skill) return;
+
+    if (!this.shouldPlaySkillReadySe(skill)) {
+        return;
+    }
+
+    AudioManager.playSe({
+        name: "Saint5",
+        volume: 20,
+        pitch: 60,
+        pan: 0
+    });
+};
+
+//==================================================
+// 9. 技能名提示
+//==================================================
+
+Game_Player.prototype.showSkillNamePopup = function(skill, slotIndex) {
+    if (!skill || !SceneManager._scene) return;
+
+    var scene = SceneManager._scene;
+    if (!(scene instanceof Scene_Map)) return;
+
+    if (!scene._mapSkillNameSprite) {
+        scene.createMapSkillNameSprite();
+    }
+
+    var color = SKILL_SLOT_COLORS[slotIndex] || "#ffffff";
+
+    if (scene._mapSkillNameSprite) {
+        scene._mapSkillNameSprite.showSkillName(skill.name, color);
+    }
+};
+
+//==================================================
+// 10. 地图场景：创建技能名精灵
+//==================================================
+Scene_Map.prototype.createMapSkillNameSprite = function() {
+    this._mapSkillNameSprite = new Sprite_MapSkillName();
+    this.addChild(this._mapSkillNameSprite);
+};
+
+//==================================================
+// 11. 技能名精灵
+//==================================================
+function Sprite_MapSkillName() {
+    this.initialize.apply(this, arguments);
+}
+
+Sprite_MapSkillName.prototype = Object.create(Sprite.prototype);
+Sprite_MapSkillName.prototype.constructor = Sprite_MapSkillName;
+
+Sprite_MapSkillName.prototype.initialize = function() {
+    Sprite.prototype.initialize.call(this);
+    this.bitmap = new Bitmap(240, 48);
+    this.anchor.x = 0.5;
+    this.anchor.y = 1;
+
+    this.opacity = 0;
+    this.visible = false;
+
+    this._duration = 0;
+    this._time = 0;
+
+    this._baseX = 0;
+    this._baseY = 0;
+};
+
+Sprite_MapSkillName.prototype.showSkillName = function(text, color) {
+    this.bitmap.clear();
+    this.bitmap.fontSize = 22;
+    this.bitmap.outlineColor = "rgba(0, 0, 0, 1)";
+    this.bitmap.outlineWidth = 4;
+    this.bitmap.textColor = color || "#ffffff";
+    this.bitmap.drawText(text, 0, 0, this.bitmap.width, 36, "center");
+
+    this.opacity = 255;
+    this.visible = true;
+
+    this._duration = 60;
+    this._time = 0;
+
+    this.updateBasePosition();
+};
+
+Sprite_MapSkillName.prototype.update = function() {
+    Sprite.prototype.update.call(this);
+
+    if (!this.visible) return;
+
+    this._time++;
+
+    this.updateBasePosition();
+
+    var rise = this._time * 0.8;
+    var swing = Math.sin(this._time * 0.25) * 12;
+
+    this.x = this._baseX + swing;
+    this.y = this._baseY - rise;
+
+    if (this._time > 35) {
+        this.opacity -= 8;
+    }
+
+    if (this._time >= this._duration) {
+        this.opacity = 0;
+        this.visible = false;
+        this.bitmap.clear();
+    }
+};
+
+Sprite_MapSkillName.prototype.updateBasePosition = function() {
+    if (!$gamePlayer) return;
+
+    var th = $gameMap.tileHeight();
+
+    this._baseX = $gamePlayer.screenX();
+    this._baseY = $gamePlayer.screenY() - th;
+};
+
+function skillHasMetaTag(skill, tagName) {
+    if (!skill) return false;
+    var meta = skill.meta || {};
+    return !!meta[tagName];
+}
+
+Game_Player.prototype.shouldPlaySkillRejectSe = function(skill) {
+    if (!skill) return false;
+    if (skillHasMetaTag(skill, "normalAttackSkill")) return false;
+    if (skillHasMetaTag(skill, "noRejectSe")) return false;
+    return true;
+};
+
+Game_Player.prototype.shouldPlaySkillReadySe = function(skill) {
+    if (!skill) return false;
+    if (skillHasMetaTag(skill, "normalAttackSkill")) return false;
+    if (skillHasMetaTag(skill, "noCooldownReadySe")) return false;
+    return true;
+};
+
+})();
