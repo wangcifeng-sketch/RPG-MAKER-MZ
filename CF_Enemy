@@ -1,0 +1,2916 @@
+/*:
+ * @target MZ
+ * @plugindesc [核心] 地图敌人系统（敌人属性 / AI攻击 / 动作锁定 / 死亡重生 / 血条飘字）
+ * @author CFpanda
+ *
+ * @command EnemyRespawn
+ * @text 敌人重生
+ * @desc 让当前事件绑定的敌人立即重生
+ *
+ * @command EnemyAttackPlayer
+ * @text 敌人攻击玩家
+ * @desc 让当前事件立即执行一次敌人攻击判定
+
+ * @param SmartMoveInterval
+ * @text 智能寻路间隔帧
+ * @type number
+ * @min 1
+ * @default 8
+ * @desc smartMoveTowardPlayer 每隔多少帧才重新计算一次。1 = 每帧，数值越大越省性能。
+ *
+
+ * @param DotMoveEnemyMoveUnit
+ * @text DotMove敌人移动单位
+ * @type number
+ * @decimals 2
+ * @min 0.05
+ * @max 1.00
+ * @default 0.50
+ * @desc 安装 DotMoveSystem 后，smartMoveTowardPlayer 每次推进的移动单位。
+
+ * @help
+ * ============================================================================
+ * ■ 插件定位
+ * ============================================================================
+ * 本插件是地图 CF_ARPG System 敌人核心模块。
+ *
+ * 主要负责：
+ * 1. 将事件绑定为地图敌人
+ * 2. 读取数据库敌人属性与行动
+ * 3. 控制敌人技能攻击 / 普攻攻击
+ * 4. 管理敌人受伤、死亡、重生
+ * 5. 管理攻击动作图、攻击锁定
+ * 6. 显示敌人血条、伤害飘字、技能名
+ * 7. 支持攻击体联动（由其他插件生成飞行物/刀光等）
+ *
+ * 本插件属于【敌人逻辑层】，
+ * 负责敌人的战斗数据、攻击判定、死亡状态与重生流程。
+ *
+ * ============================================================================
+ * ■ 事件绑定
+ * ============================================================================
+ * 在事件备注中写：
+ *
+ * <enemy:1>
+ *
+ * 表示该事件绑定数据库中的敌人 ID 1。
+ *
+ * 绑定后事件会自动创建敌人实体，并读取数据库中的：
+ * - 最大HP / 最大MP
+ * - 攻击、防御、魔攻、魔防、敏捷、幸运
+ * - 命中、闪避、暴击
+ * - 敌人 Actions 技能行动表
+ *
+ * ============================================================================
+ * ■ 插件指令
+ * ============================================================================
+ *
+ * ◆ EnemyRespawn
+ * 让当前事件绑定的敌人立即重生
+ *
+ * ◆ EnemyAttackPlayer
+ * 让当前事件立即执行一次攻击判定
+ *
+ * ============================================================================
+ * ■ 脚本调用
+ * ============================================================================
+ *
+ * 【1】当前事件攻击玩家】
+ * 在事件移动路线或脚本中可写：
+ *
+ * this.enemyAttackPlayer();
+ *
+ * 用于让当前事件立刻执行一次攻击。
+ *
+ * --------------------------------------------------------------------------
+ * 【2】指定事件攻击玩家】
+ *
+ * EnemyAttackPlayer(eventId);
+ *
+ * 例如：
+ * EnemyAttackPlayer(3);
+ *
+ * 表示让 3 号事件立即攻击玩家。所以如有需要本战斗系统支持扩展宠物或者伙伴。
+ *
+ * ============================================================================
+ * ■ 自定义路线中的常见写法
+ * ============================================================================
+ * 例如敌人接近玩家后攻击：
+ *
+ * 脚本：this.smartMoveTowardPlayer();
+ * 脚本：this.smartMoveTowardPlayer();
+ * 脚本：this.smartMoveTowardPlayer();
+ * 朝向玩家
+ * 脚本：this.enemyAttackPlayer();
+ * 朝向玩家
+ *
+ * 或者不用脚本this.smartMoveTowardPlayer(); 负责移动。 可用接近玩家 接近玩家，但不够智能。
+ *
+ * ============================================================================
+ * ■ 敌人死亡逻辑
+ * ============================================================================
+ * 当敌人 HP <= 0 时，会自动执行：
+ *
+ * 1. 敌人 HP 归零
+ * 2. 写入状态存档
+ * 3. 发放数据库敌人的 EXP 给队长
+ * 4. 打开当前事件独立开关 C
+ *
+ * 例如：
+ * A页：正常敌人攻击页
+ * C页：死亡处理页
+ * D页：等待重生页
+ *
+ * ============================================================================
+ * ■ 推荐死亡 / 重生事件流程
+ * ============================================================================
+ * 推荐事件页思路：
+ * 
+ * 【A页】
+ * 正常敌人页
+ * 写 <enemy:x>
+ *
+ * 【C页】
+ * 敌人死亡后切入此页
+ * 可在此页处理：
+ * - 掉落物      可搭配CF_EnemyLoot.js使用，更高效直接敌人数据库调取你的掉落设置。
+ *               并且可视化物品图标，接触拾取。  执行插件命令即可
+ *
+ * - 死亡动画      C页放死亡图  可在执行内容表设置一个自定义移动，里面设置
+ *                 开启隐身，等3帧 关闭隐身..... 重复重复多次达到闪烁效果，
+ *                 最后关闭隐身收尾。
+ *
+ * - 最后打开独立开关 D
+ *
+ * 【D页】
+ *         重生等待页  仅用于等待重生倒计时
+ *         空行走图    优先级:人物下方        
+ *         本插件会在 D 页激活时自动开始重生倒计时。
+ *
+ * ============================================================================
+ * ■ 自动重生倒计时
+ * ============================================================================
+ * 当事件处于 D 独立开关页时，
+ * 插件会自动开始倒计时。
+ *
+ * 倒计时结束后会自动执行敌人重生。
+ *
+ * 默认重生时间：
+ * 6000 帧
+ *
+ * 约等于：
+ * 100 秒
+ *
+ * 你也可以在事件备注中写：
+ *
+ * <respawn:3000>
+ *
+ * 表示该事件敌人在进入 D 页后，
+ * 3000 帧后自动重生。
+ *
+ * 说明：
+ * - <respawn:x> 写在事件备注中
+ * - x 的单位是帧
+ * - 60帧 = 1秒
+ *
+ * ============================================================================
+ * ■ UI 显示
+ * ============================================================================
+ * 本插件会自动显示：
+ *
+ * - 敌人血条
+ * - 敌人血量数字
+ * - 伤害数字飘字
+ * - 暴击数字飘字
+ * - MISS 飘字
+ * - 技能名称飘字
+ *
+ * 其中：
+ * - 普通伤害默认红色
+ * - 暴击伤害默认黄色
+ * - 技能名默认蓝色
+ * ============================================================================
+ * ■ 敌人状态保存
+ * ============================================================================
+ * 本插件会按：
+ * 地图ID + 事件ID
+ * 保存敌人的状态。
+ *
+ * 保存内容包括：
+ * - enemyId
+ * - hp
+ * - mp
+ * - deadProcessed
+ *
+ * 这表示：
+ * 只要地图事件还是同一个敌人，事件页刷新后也会尽量保持原本血量、
+ * MP 与死亡处理状态，而不是每次翻页都重新满血初始化。
+ *
+ * ============================================================================
+ * ■ 技能距离
+ * ============================================================================
+ * 技能备注可写：
+ *
+ * <range:3>
+ *
+ * 表示该技能只能攻击敌人当前朝向前方直线 3 格内的目标。
+ *
+ * 说明：
+ * 1. 没写时默认攻击距离为 1 格
+ * 2. 只判定敌人面朝方向正前方直线
+ * 3. 会检测路径是否可通行
+ * 4. 如果中间被障碍阻挡，则技能无法命中
+ *
+ * 这个备注可用于敌人技能，也可与玩家共用同一个技能备注体系。
+ *
+ * ============================================================================
+ * ■ 技能特殊备注
+ * ============================================================================
+ * 此为插件 CF_AttackObject.js 战斗系统联动 负责攻击体与碰撞逻辑，图片处理。
+ * 【1】攻击体技能
+ * 技能备注：
+ *
+ * <attackObject:slash>   
+ * 贴脸攻击，适用于刀，剑技能
+ *
+ * <attackObject:arrow> 
+ * 表示该技能不立即直接结算伤害，
+ * 而是改为生成攻击体，由其他插件处理飞行、碰撞、命中。
+ *
+ * 本插件只负责敌人的：
+ * - 攻击动作
+ * - 攻击时机
+ * - 攻击体生成请求
+ *
+ * 攻击体本身的移动、碰撞与命中，需要由攻击体插件负责。
+ *
+ * --------------------------------------------------------------------------
+ * 【2】普通攻击技能标记
+ * 技能备注：
+ *
+ * <normalAttackSkill>
+ *
+ * 作用：
+ * 使用该技能时，不显示技能名飘字。
+ *
+ * 适合普通攻击、平A技能使用。
+ *
+ * --------------------------------------------------------------------------
+ * 【3】技能音效
+ * 技能备注可写：
+ *
+ * <se:Slash1>
+ * 或：
+ * <se:Slash1,90,100,0>
+ *
+ * 格式说明：
+ * <se:音效名,音量,音调,声像>
+ *
+ * 例如：
+ * <se:Attack2,90,100,0>
+ *
+ * 如果只写音效名，则默认：
+ * - 音量 90
+ * - 音调 100
+ * - 声像 0
+ *
+ * ============================================================================
+ * ■ 敌人攻击逻辑
+ * ============================================================================
+ * 敌人执行攻击时会：
+ *
+ * 1. 从数据库敌人 Actions 中读取可用行动
+ * 2. 自动检查行动条件是否成立
+ * 3. 自动检查 MP / TP 是否足够
+ * 4. 按 rating 权重选择最终技能
+ * 5. 检查目标是否在技能攻击距离内
+ * 6. 播放攻击动作与技能音效
+ * 7. 扣除技能消耗
+ * 8. 直接结算伤害，或生成攻击体
+ *
+ * 说明：
+ * - 如果技能带 <attackObject:xxx>，则改为攻击体流程
+ * - 如果技能没有攻击体备注，则直接对玩家结算伤害
+ *
+ * ============================================================================
+ * ■ 命中与伤害
+ * ============================================================================
+ *
+ * 【普通攻击】
+ * - 按敌人的 hit 与玩家 eva 计算命中
+ * - 伤害基础值参考敌人 atk 与玩家 def
+ * - 可触发暴击
+ *
+ * 【技能攻击】
+ * - 按技能 successRate、敌人 hit、玩家 eva 共同计算命中
+ * - 技能伤害公式直接读取数据库技能公式
+ * - 只处理 HP伤害 / HP恢复 类型
+ * - HP伤害技能可触发暴击
+ *
+ * 未命中时会显示：
+ * MISS 配 miss.ogg 音效
+ *
+ * ============================================================================
+ * ■ 攻击动作图  索引：img\actions (actions新建文件夹)
+ * ============================================================================
+ * 敌人攻击时会自动切换攻击行走图。
+ *
+ * 规则：
+ * 正常图img\characters：$Enemy1
+ * 攻击图img\actions：   $Enemy1_attack
+ *
+ * 例如：
+ * 正常图文件名：$Skeleton
+ * 攻击图文件名：$Skeleton_attack
+ *
+ * 攻击开始时会自动切换攻击图，
+ * 并按 3 帧顺序播放动作，再切回原图。
+ *
+ * 请确保攻击图资源已准备好。
+ *
+ * ============================================================================
+ * ■ 敌人重生效果
+ * ============================================================================
+ * 1. 重新创建敌人实体
+ * 2. 恢复满 HP / 满 MP
+ * 3. 清除死亡处理状态
+ * 4. 关闭独立开关 C
+ * 5. 关闭独立开关 D
+ * 6. 刷新事件页
+ *    也就是说，
+ *    重生后敌人会重新回到正常敌人页，进入下一轮循环。
+ *
+ * ============================================================================
+ * ■ 注意事项
+ * ============================================================================
+ * 1. 敌人事件必须写 <enemy:id>
+ * 2. 玩家战斗对象默认是队长
+ * 3. 敌人技能来源于数据库敌人 Actions
+ * 4. 技能没写 <range:x> 时默认攻击距离为 1 格
+ * 5. 带 <attackObject:xxx> 的技能不会直接结算伤害
+ * 6. 敌人死亡后通常建议用独立开关 C 切死亡页
+ * 7. 敌人等待重生时建议用独立开关 D 切到重生页
+ * 8. 自动重生倒计时只会在 D 页激活时开始
+ * 9. 攻击动作图文件名必须符合 “原图名_attack” 规则
+ *
+ * ============================================================================
+ * ■ 以下是核心战斗系统插件 (在此做个介绍)
+ * ============================================================================
+ *
+ *   推荐插件顺序：
+ *   1. 敌人实体插件            CF_Enemy.js
+ *   2. 本插件                  CF_Attack.js
+ *   3. 攻击体伤害动画处理插件  CF_AttackObject.js
+ *   4. 玩家武器动作图处理插件  CF_PlayerActionMotion.js
+ *   5. 技能释放与武器联动插件  CF_PlayerSkillCast.js
+ *   6. 按键技能栏UI窗口插件    CF_BattleSkill_UI.js
+ *   7. 敌人视野仇恨和攻击设置  CF_Eventsight.js
+ *   8. 敌人掉落处理插件        CF_EnemyLoot.js
+ *
+ *      可选辅助插件:   地图UI显示玩家HP/MP插件     CF_HP.js 
+ *   (非绑定在战斗系统内的)弓的羽箭依赖扩展插件     CF_BowAmmoSystem.js
+ *      强大完美的换装系统+武器与战斗图联动插件     CF_Equipment.js
+ *      调控玩家与事件图像X,Y位置的辅助型插件       CF_SetPosition
+ *      物品获得信息提示(图标+名称)辅助型插件       CF_LootlogScroll
+ *      按键物品快捷栏   辅助型插件                 CF_MapToolBar
+ *      连击数显示 增加打击感   扩展型插件          CF_BattleComboSystem
+ *      还有许多技能与辅助型扩展插件..............
+ *
+ * ============================================================================
+ * ■ 版权说明
+ * ============================================================================
+ * 本插件仅限：
+ * ● 学习用途
+ * ● 非商业使用
+ *
+ * 禁止：
+ * ● 商业使用
+ * ● 商业用途需获得作者授权
+ * ============================================================================
+ */
+
+(function() {
+
+var pluginName = "CF_Enemy";
+var params = PluginManager.parameters(pluginName);
+var CF_ENEMY_SMART_MOVE_INTERVAL = Math.max(1, Number(params["SmartMoveInterval"] || 8));
+var CF_ENEMY_DEFAULT_RESPAWN_WAIT = 6000; // 6000帧 = 100秒
+
+
+    //==================================================
+    // 1. 事件敌人属性初始化
+    //==================================================
+    var _Game_Event_setupPage = Game_Event.prototype.setupPage;
+    Game_Event.prototype.setupPage = function() {
+        _Game_Event_setupPage.call(this);
+        this.initEnemyEntity();
+    };
+
+Game_Event.prototype.enemyStateKey = function() {
+    return $gameMap.mapId() + "_" + this.eventId();
+};
+
+Game_Event.prototype.ensureEnemyStateStore = function() {
+    if (!$gameSystem._cfEnemyStateStore) {
+        $gameSystem._cfEnemyStateStore = {};
+    }
+    return $gameSystem._cfEnemyStateStore;
+};
+
+
+Game_Event.prototype.initEnemyEntity = function() {
+    if (!this.event()) return;
+
+    var note = this.event().note || "";
+    var enemyMatch = note.match(/<enemy:(\d+)>/i);
+
+    if (enemyMatch) {
+        var enemyId = Number(enemyMatch[1]);
+        var store = this.ensureEnemyStateStore();
+        var key = this.enemyStateKey();
+        var saved = store[key];
+
+        // 只有第一次，或者 enemyId 变化时，才重新创建敌人实体
+        if (!this._enemyEntity || this._enemyId !== enemyId) {
+            this._enemyId = enemyId;
+            this._enemyEntity = new Game_Enemy(enemyId, 0, 0);
+
+            if (saved && saved.enemyId === enemyId) {
+                this._hp = saved.hp != null ? saved.hp : this._enemyEntity.mhp;
+                this._mp = saved.mp != null ? saved.mp : this._enemyEntity.mmp;
+                this._deadProcessed = !!saved.deadProcessed;
+
+                if (this._enemyEntity.setHp) this._enemyEntity.setHp(this._hp);
+                if (this._enemyEntity.setMp) this._enemyEntity.setMp(this._mp);
+            } else {
+                this._hp = this._enemyEntity.mhp;
+                this._mp = this._enemyEntity.mmp;
+                this._deadProcessed = false;
+
+                store[key] = {
+                    enemyId: enemyId,
+                    hp: this._hp,
+                    mp: this._mp,
+                    deadProcessed: false
+                };
+            }
+        } else {
+            if (this._hp == null) {
+                if (saved && saved.enemyId === enemyId) {
+                    this._hp = saved.hp != null ? saved.hp : this._enemyEntity.hp;
+                    this._mp = saved.mp != null ? saved.mp : this._enemyEntity.mp;
+                    this._deadProcessed = !!saved.deadProcessed;
+                } else {
+                    this._hp = this._enemyEntity.hp;
+                    this._mp = this._enemyEntity.mp;
+                }
+            }
+
+            if (this._enemyEntity.setHp) this._enemyEntity.setHp(this._hp);
+            if (this._enemyEntity.setMp) this._enemyEntity.setMp(this._mp);
+        }
+    } else {
+        this._enemyId = 0;
+        this._enemyEntity = null;
+        this._hp = 0;
+        this._mp = 0;
+        this._deadProcessed = false;
+    }
+
+    if (this._attackCooldown == null) this._attackCooldown = 0;
+    if ($gameMap && $gameMap.markEnemyTargetCacheDirty) {
+        $gameMap.markEnemyTargetCacheDirty();
+    }
+};
+    //==================================================
+    // 2. 敌人属性映射
+    //==================================================
+    Object.defineProperty(Game_Event.prototype, "atk", {
+        get: function() { return this._enemyEntity ? this._enemyEntity.atk : 0; },
+        configurable: true
+    });
+
+    Object.defineProperty(Game_Event.prototype, "def", {
+        get: function() { return this._enemyEntity ? this._enemyEntity.def : 0; },
+        configurable: true
+    });
+
+    Object.defineProperty(Game_Event.prototype, "mat", {
+        get: function() { return this._enemyEntity ? this._enemyEntity.mat : 0; },
+        configurable: true
+    });
+
+    Object.defineProperty(Game_Event.prototype, "mdf", {
+        get: function() { return this._enemyEntity ? this._enemyEntity.mdf : 0; },
+        configurable: true
+    });
+
+    Object.defineProperty(Game_Event.prototype, "agi", {
+        get: function() { return this._enemyEntity ? this._enemyEntity.agi : 0; },
+        configurable: true
+    });
+
+    Object.defineProperty(Game_Event.prototype, "luk", {
+        get: function() { return this._enemyEntity ? this._enemyEntity.luk : 0; },
+        configurable: true
+    });
+
+    Object.defineProperty(Game_Event.prototype, "hit", {
+        get: function() { return this._enemyEntity ? this._enemyEntity.hit : 0; },
+        configurable: true
+    });
+
+    Object.defineProperty(Game_Event.prototype, "eva", {
+        get: function() { return this._enemyEntity ? this._enemyEntity.eva : 0; },
+        configurable: true
+    });
+
+    Object.defineProperty(Game_Event.prototype, "cri", {
+        get: function() { return this._enemyEntity ? this._enemyEntity.cri : 0; },
+        configurable: true
+    });
+
+    //==================================================
+    // 3. 飘字系统（MISS / 数字）
+    //==================================================
+Game_Character.prototype.showDamageText = function(text, color) {
+    if (!this._damageTexts) this._damageTexts = [];
+
+    this._damageTexts.push({
+        text: String(text || ""),
+        color: color || "#ffffff",
+        duration: 60,
+        vy: -1.2,
+        offsetY: this._damageTexts.length * 16   // 后来的字稍微错开
+    });
+};
+
+    Game_Character.prototype.showSkillNameText = function(text, color) {
+        this._skillNameText = {
+            text: String(text || ""),
+            color: color || "#66ccff",
+            duration: 45,
+            vy: -0.8
+        };
+    };
+
+    //==================================================
+    // 4. Sprite_Character：血条 + 飘字
+    //==================================================
+    var _Sprite_Character_update = Sprite_Character.prototype.update;
+    Sprite_Character.prototype.update = function() {
+        _Sprite_Character_update.call(this);
+        this.updateEnemyUI();
+        this.updateDamageText();
+        this.updateSkillNameText();
+    };
+
+Sprite_Character.prototype.updateSkillNameText = function() {
+    var char = this._character;
+    if (!char || !char._skillNameText) return;
+
+    if (!this._skillNameSprite) {
+        this.createSkillNameSprite();
+    }
+
+    var data = char._skillNameText;
+    var sprite = this._skillNameSprite;
+
+    if (!sprite._initialized) {
+        this.refreshSkillNameText(data.text, data.color);
+        sprite.visible = true;
+        sprite.opacity = 255;
+        sprite.y = -52;   // 比血条更高一点
+        sprite._initialized = true;
+    }
+
+    sprite.y += data.vy;
+    sprite.opacity -= 5;
+    data.duration--;
+
+    if (data.duration <= 0) {
+        sprite.visible = false;
+        sprite.opacity = 255;
+        sprite.y = -52;
+        sprite._initialized = false;
+        char._skillNameText = null;
+    }
+};
+
+Sprite_Character.prototype.createSkillNameSprite = function() {
+    this._skillNameSprite = new Sprite();
+    this._skillNameSprite.bitmap = new Bitmap(160, 36);
+    this._skillNameSprite.anchor.x = 0.5;
+    this._skillNameSprite.anchor.y = 1;
+    this._skillNameSprite.y = -52;
+    this._skillNameSprite.visible = false;
+    this._skillNameSprite._initialized = false;
+    this.addChild(this._skillNameSprite);
+};
+
+Sprite_Character.prototype.refreshSkillNameText = function(text, color) {
+    var bitmap = this._skillNameSprite.bitmap;
+    bitmap.clear();
+
+    bitmap.fontSize = 18;
+    bitmap.textColor = color || "#66ccff";
+    bitmap.outlineColor = "#000000";
+    bitmap.outlineWidth = 4;
+
+    bitmap.drawText(text, 0, 0, bitmap.width, 32, "center");
+};
+    //--------------------------
+    // 敌人血条
+    //--------------------------
+Sprite_Character.prototype.updateEnemyUI = function() {
+    var char = this._character;
+
+    if (char && char._enemyEntity && char._hp > 0) {
+        if (!this._enemyBarSprite) {
+            this.createEnemyBar();
+        }
+        this._enemyBarSprite.visible = true;
+
+        var forceRefresh = false;
+        if (this._enemyHpNumberTimer > 0) {
+            this._enemyHpNumberTimer--;
+            forceRefresh = true;
+        }
+
+        this.refreshEnemyBar(forceRefresh);
+    } else {
+        if (this._enemyBarSprite) {
+            this._enemyBarSprite.visible = false;
+        }
+    }
+};
+
+Sprite_Character.prototype.createEnemyBar = function() {
+    this._enemyBarSprite = new Sprite();
+    this._enemyBarSprite.bitmap = new Bitmap(100, 40);
+    this._enemyBarSprite.anchor.x = 0.5;
+    this._enemyBarSprite.anchor.y = 1;
+    this._enemyBarSprite.y = -36;
+    this.addChild(this._enemyBarSprite);
+
+    this._lastHp = -1;
+    this._lastMp = -1;
+    this._enemyHpNumberTimer = 0;   // 数字显示剩余帧数
+};
+
+Sprite_Character.prototype.refreshEnemyBar = function(forceRefresh) {
+    var char = this._character;
+    if (!char || !char._enemyEntity) return;
+
+    var hp = Math.max(0, Math.floor(char._hp));
+    var mhp = Math.max(1, char._enemyEntity.mhp);
+
+    var mp = Math.max(0, Math.floor(char._enemyEntity.mp));
+    var mmp = Math.max(1, char._enemyEntity.mmp);
+
+    var oldHp = this._lastHp;
+    var oldMp = this._lastMp;
+
+    // 只有 HP/MP 变化，或者数字显示计时中，才重绘
+    if (!forceRefresh && oldHp === hp && oldMp === mp) return;
+
+    // 只有“掉血”时才显示数字 60 帧
+    if (oldHp >= 0 && hp < oldHp) {
+        this._enemyHpNumberTimer = 60;
+    }
+
+    this._lastHp = hp;
+    this._lastMp = mp;
+
+    var hpRate = hp / mhp;
+    var mpRate = mp / mmp;
+
+    var bitmap = this._enemyBarSprite.bitmap;
+    bitmap.clear();
+
+    var bw = 60;
+    var bh = 7;
+    var bx = 22;
+    var hpBy = 0;
+    var mpBy = 27;
+
+    bitmap.fillRect(bx, hpBy, bw, bh, "rgba(0,0,0,0.8)");
+    bitmap.fillRect(bx + 1, hpBy + 1, Math.floor((bw - 2) * hpRate), bh - 2, "#ff4444");
+
+    //bitmap.fillRect(bx, mpBy, bw, bh, "rgba(0,0,0,0.8)");
+    //bitmap.fillRect(bx + 1, mpBy + 1, Math.floor((bw - 2) * mpRate), bh - 2, "#4488ff");
+
+    // 只有掉血后的计时内才显示数字
+    if (this._enemyHpNumberTimer > 0) {
+        bitmap.fontSize = 10;
+        bitmap.textColor = "#ffffff";
+        bitmap.outlineColor = "#000000";
+        bitmap.outlineWidth = 3;
+        bitmap.drawText(hp + "/" + mhp, 12, -12, bitmap.width, 32, "center");
+    }
+};
+
+    //--------------------------
+    // 飘字显示
+    //--------------------------
+Sprite_Character.prototype.updateDamageText = function() {
+    var char = this._character;
+    if (!char) return;
+
+    if (!char._damageTexts) char._damageTexts = [];
+    if (!this._damageSprites) this._damageSprites = [];
+
+    // 有新的伤害文字，就创建新 sprite
+    while (this._damageSprites.length < char._damageTexts.length) {
+        this.createDamageSprite(char._damageTexts[this._damageSprites.length]);
+    }
+
+    // 更新所有飘字
+    for (var i = this._damageTextsLengthSafe(char) - 1; i >= 0; i--) {
+        var data = char._damageTexts[i];
+        var sprite = this._damageSprites[i];
+        if (!data || !sprite) continue;
+
+        if (!sprite._initialized) {
+            this.refreshDamageText(sprite, data.text, data.color);
+            sprite.visible = true;
+            sprite.opacity = 255;
+            sprite.y = -24 - (data.offsetY || 0);
+            sprite._initialized = true;
+        }
+
+        sprite.y += data.vy;
+        sprite.opacity -= 4;
+        data.duration--;
+
+        if (data.duration <= 0) {
+            this.removeChild(sprite);
+            this._damageSprites.splice(i, 1);
+            char._damageTexts.splice(i, 1);
+        }
+    }
+};
+
+Sprite_Character.prototype._damageTextsLengthSafe = function(char) {
+    return char && char._damageTexts ? char._damageTexts.length : 0;
+};
+
+Sprite_Character.prototype.createDamageSprite = function(data) {
+    var sprite = new Sprite();
+    sprite.bitmap = new Bitmap(120, 40);
+    sprite.anchor.x = 0.5;
+    sprite.anchor.y = 1;
+    sprite.y = -24 - ((data && data.offsetY) || 0);
+    sprite.visible = false;
+    sprite._initialized = false;
+    this.addChild(sprite);
+    this._damageSprites.push(sprite);
+};
+
+Sprite_Character.prototype.refreshDamageText = function(sprite, text, color) {
+    var bitmap = sprite.bitmap;
+    bitmap.clear();
+
+    if (color === "#ffff66") {
+        bitmap.fontSize = 28; // 暴击
+    } else {
+        bitmap.fontSize = 20; // 普通
+    }
+
+    bitmap.textColor = color || "#ffffff";
+    bitmap.outlineColor = "#000000";
+    bitmap.outlineWidth = 4;
+
+    bitmap.drawText(text, 0, 0, bitmap.width, 32, "center");
+};
+
+    //==================================================
+    // 5. 敌人更新：攻击冷却
+    //==================================================
+    var _Game_Event_update = Game_Event.prototype.update;
+    Game_Event.prototype.update = function() {
+        _Game_Event_update.call(this);
+        this.updateAttackCooldown();
+        this.updateRegen();
+    };
+
+    Game_Event.prototype.updateAttackCooldown = function() {
+        if (this._attackCooldown == null) this._attackCooldown = 0;
+        if (this._attackCooldown > 0) this._attackCooldown--;
+    };
+
+    //==================================================
+    // 6. 玩家战斗对象（单角色 = 队长）
+    //==================================================
+    Game_Event.prototype.playerBattler = function() {
+        return $gameParty.leader();
+    };
+
+var CF_ENEMY_EPS = 0.00001;
+var CF_ENEMY_HALF_STEP = 0.5;
+
+function cfEnemyRoundHalf(n) {
+    return Math.round(Number(n || 0) * 2) / 2;
+}
+
+function cfEnemyNear(a, b, range) {
+    return Math.abs(a - b) <= (range || CF_ENEMY_EPS);
+}
+
+function cfEnemyVectorFromDir(d) {
+    switch (d) {
+        case 1: return { x: -1, y:  1 };
+        case 2: return { x:  0, y:  1 };
+        case 3: return { x:  1, y:  1 };
+        case 4: return { x: -1, y:  0 };
+        case 6: return { x:  1, y:  0 };
+        case 7: return { x: -1, y: -1 };
+        case 8: return { x:  0, y: -1 };
+        case 9: return { x:  1, y: -1 };
+        default: return { x: 0, y: 0 };
+    }
+}
+
+function cfEnemyDirToHV(d) {
+    switch (d) {
+        case 1: return [4, 2];
+        case 3: return [6, 2];
+        case 7: return [4, 8];
+        case 9: return [6, 8];
+        default: return [0, 0];
+    }
+}
+
+function cfEnemyCharX(ch) {
+    if (!ch) return 0;
+
+    // 移动中优先用真实坐标，避免“还没走到位就先攻击”
+    if (ch.isMoving && ch.isMoving() && ch._realX != null) {
+        return cfEnemyRoundHalf(ch._realX);
+    }
+
+    if (typeof ch.cfHalfX === "function") return cfEnemyRoundHalf(ch.cfHalfX());
+    if (ch._x != null) return cfEnemyRoundHalf(ch._x);
+    return cfEnemyRoundHalf(ch.x || 0);
+}
+
+function cfEnemyCharY(ch) {
+    if (!ch) return 0;
+
+    // 移动中优先用真实坐标，避免“还没走到位就先攻击”
+    if (ch.isMoving && ch.isMoving() && ch._realY != null) {
+        return cfEnemyRoundHalf(ch._realY);
+    }
+
+    if (typeof ch.cfHalfY === "function") return cfEnemyRoundHalf(ch.cfHalfY());
+    if (ch._y != null) return cfEnemyRoundHalf(ch._y);
+    return cfEnemyRoundHalf(ch.y || 0);
+}
+
+function cfEnemyFacingDir8(ch) {
+    if (!ch) return 0;
+    if (typeof ch.cfInteractionDirection === "function") {
+        return ch.cfInteractionDirection();
+    }
+    return ch.direction ? ch.direction() : 0;
+}
+
+function cfEnemyDirBetweenHalfPos(fromX, fromY, toX, toY) {
+    var dx = cfEnemyNear(toX, fromX) ? 0 : (toX > fromX ? 1 : -1);
+    var dy = cfEnemyNear(toY, fromY) ? 0 : (toY > fromY ? 1 : -1);
+
+    if (dx === -1 && dy ===  1) return 1;
+    if (dx ===  0 && dy ===  1) return 2;
+    if (dx ===  1 && dy ===  1) return 3;
+    if (dx === -1 && dy ===  0) return 4;
+    if (dx ===  1 && dy ===  0) return 6;
+    if (dx === -1 && dy === -1) return 7;
+    if (dx ===  0 && dy === -1) return 8;
+    if (dx ===  1 && dy === -1) return 9;
+    return 0;
+}
+
+function cfEnemyFaceDirByContact(fromX, fromY, toX, toY) {
+    fromX = cfEnemyRoundHalf(fromX);
+    fromY = cfEnemyRoundHalf(fromY);
+    toX = cfEnemyRoundHalf(toX);
+    toY = cfEnemyRoundHalf(toY);
+
+    var dx = toX - fromX;
+    var dy = toY - fromY;
+
+    // 左右边贴面：|dx| = 1，且另一轴只是偏移，不是纯角
+    if (cfEnemyNear(Math.abs(dx), 1.0) && Math.abs(dy) < 1.0 - CF_ENEMY_EPS) {
+        return dx > 0 ? 6 : 4;
+    }
+
+    // 上下边贴面：|dy| = 1，且另一轴只是偏移，不是纯角
+    if (cfEnemyNear(Math.abs(dy), 1.0) && Math.abs(dx) < 1.0 - CF_ENEMY_EPS) {
+        return dy > 0 ? 2 : 8;
+    }
+
+    // 不是贴面时，退回旧的中心点方向
+    return cfEnemyDirBetweenHalfPos(fromX, fromY, toX, toY);
+}
+
+function cfEnemyFrontPoint(ch, dist) {
+    var dir = cfEnemyFacingDir8(ch);
+    var vec = cfEnemyVectorFromDir(dir);
+    var step = dist != null ? dist : CF_ENEMY_HALF_STEP;
+
+    return {
+        x: cfEnemyRoundHalf(cfEnemyCharX(ch) + vec.x * step),
+        y: cfEnemyRoundHalf(cfEnemyCharY(ch) + vec.y * step)
+    };
+}
+
+// 九宫接触：允许贴边，不允许纯斜角
+function cfEnemyNineGridTouchNoCorner(x1, y1, x2, y2) {
+    var dx = Math.abs(cfEnemyRoundHalf(x1) - cfEnemyRoundHalf(x2));
+    var dy = Math.abs(cfEnemyRoundHalf(y1) - cfEnemyRoundHalf(y2));
+
+    if (dx > 1.0 + CF_ENEMY_EPS || dy > 1.0 + CF_ENEMY_EPS) {
+        return false;
+    }
+
+    if (cfEnemyNear(dx, 1.0) && cfEnemyNear(dy, 1.0)) {
+        return false;
+    }
+
+    return true;
+}
+
+function cfEnemyAddTileUnique(list, x, y) {
+    var key = x + "," + y;
+    for (var i = 0; i < list.length; i++) {
+        if (list[i].key === key) return;
+    }
+    list.push({ key: key, x: x, y: y });
+}
+
+function cfEnemySampleTilesForBody(x, y) {
+    var rx = cfEnemyRoundHalf(x);
+    var ry = cfEnemyRoundHalf(y);
+
+    var left = Math.floor(rx + CF_ENEMY_EPS);
+    var right = Math.ceil(rx - CF_ENEMY_EPS);
+    var top = Math.floor(ry + CF_ENEMY_EPS);
+    var bottom = Math.ceil(ry - CF_ENEMY_EPS);
+
+    var result = [];
+    cfEnemyAddTileUnique(result, left, top);
+    cfEnemyAddTileUnique(result, left, bottom);
+    cfEnemyAddTileUnique(result, right, top);
+    cfEnemyAddTileUnique(result, right, bottom);
+    return result;
+}
+
+function cfEnemyBodyPassable(x, y) {
+    var tiles = cfEnemySampleTilesForBody(x, y);
+
+    for (var i = 0; i < tiles.length; i++) {
+        var tx = tiles[i].x;
+        var ty = tiles[i].y;
+
+        if (!$gameMap.isValid(tx, ty)) return false;
+
+        var passable =
+            $gameMap.isPassable(tx, ty, 2) ||
+            $gameMap.isPassable(tx, ty, 4) ||
+            $gameMap.isPassable(tx, ty, 6) ||
+            $gameMap.isPassable(tx, ty, 8);
+
+        if (!passable) return false;
+    }
+
+    return true;
+}
+    //==================================================
+    // 7. 普通攻击伤害计算
+    //==================================================
+    Game_Event.prototype.calcAttackPlayerDamage = function() {
+        if (!this._enemyEntity) return 0;
+
+        var actor = this.playerBattler();
+        if (!actor) return 0;
+
+        var enemy = this._enemyEntity;
+
+        var hitRate = enemy.hit || 0.95;
+        var evaRate = actor.eva || 0.05;
+        var finalHit = Math.max(0.05, hitRate - evaRate);
+
+        if (Math.random() > finalHit) {
+            return 0;
+        }
+
+        var baseDamage = enemy.atk - actor.def * 0.5;
+        baseDamage = Math.max(1, Math.floor(baseDamage));
+
+        if (Math.random() < (enemy.cri || 0)) {
+            baseDamage = Math.floor(baseDamage * 1.5);
+        }
+
+        var variance = 0.85 + Math.random() * 0.30;
+        var damage = Math.floor(baseDamage * variance);
+
+        return Math.max(1, damage);
+    };
+
+    //==================================================
+    // 9. 从数据库敌人行动中取可用技能
+    //==================================================
+Game_Event.prototype.selectEnemyActionByRating = function() {
+    if (!this._enemyEntity || !this._enemyEntity.enemy()) return null;
+
+    var enemyData = this._enemyEntity.enemy();
+    var actions = enemyData.actions || [];
+    var validActions = [];
+
+    for (var i = 0; i < actions.length; i++) {
+        var action = actions[i];
+        if (!action) continue;
+        if (!action.skillId || action.skillId <= 0) continue;
+
+        var skill = $dataSkills[action.skillId];
+        if (!skill) continue;
+
+        // 数据库里的行动条件必须成立
+        if (!this._enemyEntity.isActionValid(action)) continue;
+
+        // MP / TP 消耗必须付得起
+        if (!this._enemyEntity.canPaySkillCost(skill)) continue;
+
+        validActions.push(action);
+    }
+
+    if (validActions.length === 0) return null;
+
+    // 模拟 RPG Maker 默认敌人行动 rating 逻辑
+    var maxRating = 0;
+    for (var i = 0; i < validActions.length; i++) {
+        if (validActions[i].rating > maxRating) {
+            maxRating = validActions[i].rating;
+        }
+    }
+
+    var ratingZero = maxRating - 3;
+    var filtered = [];
+    var sum = 0;
+
+    for (var i = 0; i < validActions.length; i++) {
+        var action = validActions[i];
+        if (action.rating > ratingZero) {
+            filtered.push(action);
+            sum += action.rating - ratingZero;
+        }
+    }
+
+    if (filtered.length === 0 || sum <= 0) return null;
+
+    var value = Math.random() * sum;
+
+    for (var i = 0; i < filtered.length; i++) {
+        var action = filtered[i];
+        value -= (action.rating - ratingZero);
+        if (value < 0) {
+            return action;
+        }
+    }
+
+    return filtered[0];
+};
+
+    //==================================================
+    // 10. 技能伤害计算（按数据库技能公式）
+    //==================================================
+    Game_Event.prototype.calcSkillDamageToPlayer = function(skill) {
+        if (!this._enemyEntity || !skill) return null;
+
+        var actor = this.playerBattler();
+        if (!actor) return null;
+
+        var enemy = this._enemyEntity;
+
+        var successRate = (skill.successRate != null ? skill.successRate : 100) / 100;
+        var hitChance = successRate * (enemy.hit || 0.95);
+        var evaRate = actor.eva || 0.05;
+        var finalHit = Math.max(0.05, hitChance - evaRate);
+
+        if (Math.random() > finalHit) {
+            return {
+                missed: true,
+                damage: 0,
+                critical: false
+            };
+        }
+
+        var damage = 0;
+        var critical = false;
+
+        if (skill.damage && skill.damage.type > 0) {
+            var a = enemy;
+            var b = actor;
+            var v = $gameVariables._data;
+
+            try {
+                damage = Math.floor(eval(skill.damage.formula || "0"));
+            } catch (e) {
+                damage = 0;
+            }
+
+            // 只对 HP伤害 允许暴击
+            if (skill.damage.type === 1) {
+                critical = Math.random() < (enemy.cri || 0);
+                if (critical) {
+                    damage = Math.floor(damage * 1.5);
+                }
+            }
+
+            var variance = skill.damage.variance || 0;
+            if (variance > 0) {
+                var amp = Math.floor(Math.abs(damage) * variance / 100);
+                damage += Math.floor(Math.random() * (amp * 2 + 1)) - amp;
+            }
+
+            // 1 = HP伤害
+            // 3 = HP恢复
+            if (skill.damage.type === 1) {
+                damage = Math.max(0, damage);
+            } else if (skill.damage.type === 3) {
+                damage = -Math.max(0, damage);
+            } else {
+                damage = 0;
+            }
+        }
+
+        return {
+            missed: false,
+            damage: damage,
+            critical: critical
+        };
+    };
+
+    //==================================================
+    // 11. 敌人攻击玩家（技能）
+    //==================================================
+Game_Event.prototype.attackPlayer = function() {
+    if (!this._enemyEntity) return false;
+
+    var actor = this.playerBattler();
+    if (!actor) return false;
+
+    if (this._attackCooldown == null) this._attackCooldown = 0;
+    if (this._attackCooldown > 0) return false;
+
+    // 还在移动到位时，禁止起手
+    if (this.isMoving && this.isMoving()) return false;
+
+    // 正在攻击动作/锁定中，也不要重复起手
+    if (this.isEnemyAttackBusy && this.isEnemyAttackBusy()) return false;
+
+    var action = this.selectEnemyActionByRating();
+    if (!action) return false;
+
+    var skillId = action.skillId;
+    var skill = $dataSkills[skillId];
+    if (!skill) return false;
+
+    // 用当前真实位置重新朝向玩家
+// 用当前真实位置重新朝向玩家
+// 已经贴面时，按“贴边方向”决定；未贴面时，才按中心点方向
+var dir8 = cfEnemyFaceDirByContact(
+    cfEnemyCharX(this),
+    cfEnemyCharY(this),
+    cfEnemyCharX($gamePlayer),
+    cfEnemyCharY($gamePlayer)
+);
+
+if (dir8 > 0) {
+    this._cfMoveDir8 = dir8;
+    this.setDirection(dir8);
+}
+
+    if (!this.canUseEnemySkillByRange(skill)) return false;
+
+    return this.useEnemySkillOnPlayer(skillId);
+};
+    //==================================================
+    // 12. 敌人攻击玩家（普通攻击 / 技能）
+    //==================================================
+Game_Event.prototype.useEnemySkillOnPlayer = function(skillId) {
+    if (!this._enemyEntity) return false;
+
+    var actor = this.playerBattler();
+    if (!actor) return false;
+
+    var skill = $dataSkills[skillId];
+    if (!skill) return false;
+
+    if (!this._enemyEntity.canPaySkillCost(skill)) {
+        return false;
+    }
+
+    var motionTime = (skillId > 1 ? 50 : 30);
+    var delay = Math.floor(motionTime * 0.45);
+
+    this.startEnemyAttackMotion(motionTime);
+    this.playSkillCastSe(skill);
+
+    var isNormalAttackSkill = /<normalAttackSkill>/i.test(skill.note || "");
+    if (!isNormalAttackSkill) {
+        this.showSkillNameText(skill.name, "#66ccff");
+    }
+
+    this._enemyEntity.paySkillCost(skill);
+
+    var hasAttackObject = false;
+    if (this.skillAttackObjectType) {
+        hasAttackObject = !!this.skillAttackObjectType(skill);
+    }
+
+    // 有攻击体：等动作+攻击体结束
+    // 无攻击体：等动作+直接技能结算结束
+    this.startEnemyAttackLock(hasAttackObject);
+
+    if (hasAttackObject && this.queueEnemyAttackObject) {
+        this.queueEnemyAttackObject(skill, delay);
+        this._attackCooldown = (skillId > 1 ? 90 : 60);
+        return true;
+    }
+
+    // 直接技能不再立刻扣血，改成延迟到出手帧再判定
+    this.queueEnemyDirectSkill(skill, delay);
+    this._attackCooldown = (skillId > 1 ? 90 : 60);
+    return true;
+};
+
+//==================================================
+// 敌人重生
+//==================================================
+Game_Event.prototype.respawnEnemy = function() {
+    if (!this._enemyId) return;
+
+    var enemyData = $dataEnemies[this._enemyId];
+    if (!enemyData) return;
+
+    this.resetEnemyDeathState();
+
+    var battler = new Game_Enemy(this._enemyId, 0, 0);
+
+    this._enemyEntity = battler;
+    this._hp = battler.mhp;
+    this._mp = battler.mmp;
+    this.resetRespawnCountdown();
+
+    var store = this.ensureEnemyStateStore();
+    store[this.enemyStateKey()] = {
+        enemyId: this._enemyId,
+        hp: this._hp,
+        mp: this._mp,
+        deadProcessed: false
+    };
+
+    var keyD = [$gameMap.mapId(), this.eventId(), "D"];
+    $gameSelfSwitches.setValue(keyD, false);
+
+    if (this.refreshEnemyBar) {
+        this.refreshEnemyBar();
+    }
+
+    this.refresh();
+    if ($gameMap && $gameMap.markEnemyTargetCacheDirty) {
+        $gameMap.markEnemyTargetCacheDirty();
+    }
+};
+
+Game_Event.prototype.updateRegen = function() {
+    if (!this._enemyEntity || this._hp <= 0) return;
+
+    if (this._regenTick == null) this._regenTick = 0;
+
+    this._regenTick++;
+
+    // 每60帧（1秒）
+    if (this._regenTick >= 120) {
+        this._regenTick = 0;
+
+        var enemy = this._enemyEntity;
+
+        // ===== HP恢复 =====
+        var mhp = enemy.mhp;
+        var hpRegen = Math.max(1, Math.floor(mhp * 0.0002)); // 0.1%
+
+        this._hp = Math.min(this._hp + hpRegen, mhp);
+
+        // ===== MP恢复 =====
+        var mmp = enemy.mmp;
+        var mpRegen = Math.max(1, Math.floor(mmp * 0.00015));
+
+        enemy.gainMp(mpRegen);
+    }
+};
+    //==================================================
+    // 13. 插件指令
+    //==================================================
+
+var _Game_Interpreter_pluginCommand = Game_Interpreter.prototype.pluginCommand;
+Game_Interpreter.prototype.pluginCommand = function(command, args) {
+    _Game_Interpreter_pluginCommand.call(this, command, args);
+
+    if (command === "EnemyAttackPlayer") {
+        var event = $gameMap.event(this._eventId);
+        if (event) {
+            event.attackPlayer();
+        }
+    } else if (command === "EnemyRespawn") {
+        var event = $gameMap.event(this._eventId);
+        if (event) {
+            event.respawnEnemy();
+        }
+    }
+};
+
+//==================================================
+// 14. 给自定义移动路线用的调用接口
+//==================================================
+Game_Character.prototype.enemyAttackPlayer = function() {
+    if (this instanceof Game_Event) {
+        this.attackPlayer();
+    }
+};
+
+window.EnemyAttackPlayer = function(eventId) {
+    var event = $gameMap.event(eventId);
+    if (event) {
+        event.attackPlayer();
+    }
+};
+
+//==================================================
+// 15. 敌人攻击动作图
+// 规则：
+// 正常图：$Enemy1
+// 攻击图：$Enemy1_attack
+//==================================================
+
+// 记录事件原始行走图名
+var _Game_Event_initMembers_CFEnemyAttackMotion = Game_Event.prototype.initMembers;
+Game_Event.prototype.initMembers = function() {
+    _Game_Event_initMembers_CFEnemyAttackMotion.call(this);
+    this._enemyNormalCharacterName = "";
+    this._enemyAttackCharacterName = "";
+    this._enemyAttackMotionWait = 0;
+    this._enemyMotionPlaying = false;
+
+    this._pendingAttackObjectSkill = null;
+    this._pendingAttackObjectDelay = 0;
+
+    this._pendingDirectSkill = null;
+    this._pendingDirectSkillDelay = 0;
+
+    this._enemyAttackLocked = false;
+    this._enemyAttackLockWaitObject = false;
+    this._enemyActiveAttackObject = null;
+    this._enemyAttackFixedDirection = 0;
+
+    this._respawnCountdownStarted = false;
+    this._respawnCountdown = 0;
+};
+
+Game_Event.prototype.isEnemyAttackBusy = function() {
+    if (this._enemyMotionPlaying) return true;
+    if (this._pendingAttackObjectSkill) return true;
+    if (this._pendingDirectSkill) return true;
+
+    if (this._enemyAttackLockWaitObject) {
+        if (this._enemyActiveAttackObject && !this._enemyActiveAttackObject._finished) {
+            return true;
+        }
+    }
+
+    return false;
+};
+
+Game_Event.prototype.startEnemyAttackLock = function(waitObject) {
+    this._enemyAttackLocked = true;
+    this._enemyAttackLockWaitObject = !!waitObject;
+    this._enemyActiveAttackObject = null;
+    this._enemyAttackFixedDirection = this.direction();
+};
+
+Game_Event.prototype.endEnemyAttackLock = function() {
+    this._enemyAttackLocked = false;
+    this._enemyAttackLockWaitObject = false;
+    this._enemyActiveAttackObject = null;
+    this._enemyAttackFixedDirection = 0;
+};
+
+var _Game_Event_setDirection_CFEnemyAttackLock = Game_Event.prototype.setDirection;
+Game_Event.prototype.setDirection = function(d) {
+    if (this._enemyAttackLocked) {
+        if (this._enemyAttackFixedDirection > 0) {
+            _Game_Event_setDirection_CFEnemyAttackLock.call(this, this._enemyAttackFixedDirection);
+            return;
+        }
+        return;
+    }
+    _Game_Event_setDirection_CFEnemyAttackLock.call(this, d);
+};
+
+Game_Event.prototype.updateEnemyAttackLock = function() {
+    if (!this._enemyAttackLocked) return;
+
+    if (!this.isEnemyAttackBusy()) {
+        this.endEnemyAttackLock();
+    }
+};
+
+Game_Event.prototype.enemyRespawnWaitFrames = function() {
+    if (!this.event()) return CF_ENEMY_DEFAULT_RESPAWN_WAIT;
+
+    var note = this.event().note || "";
+    var match = note.match(/<respawn:(\d+)>/i);
+
+    if (match) {
+        return Math.max(1, Number(match[1] || CF_ENEMY_DEFAULT_RESPAWN_WAIT));
+    }
+
+    return CF_ENEMY_DEFAULT_RESPAWN_WAIT;
+};
+
+Game_Event.prototype.isRespawnPageActive = function() {
+    var keyD = [$gameMap.mapId(), this.eventId(), "D"];
+    return $gameSelfSwitches.value(keyD);
+};
+
+Game_Event.prototype.resetRespawnCountdown = function() {
+    this._respawnCountdownStarted = false;
+    this._respawnCountdown = 0;
+};
+
+Game_Event.prototype.updateAutoRespawnCountdown = function() {
+    if (!this._enemyId) return;
+
+    if (!this.isRespawnPageActive()) {
+        this.resetRespawnCountdown();
+        return;
+    }
+
+    if (!this._respawnCountdownStarted) {
+        this._respawnCountdownStarted = true;
+        this._respawnCountdown = this.enemyRespawnWaitFrames();
+    }
+
+    if (this._respawnCountdown > 0) {
+        this._respawnCountdown--;
+    }
+
+    if (this._respawnCountdown <= 0) {
+        this.resetRespawnCountdown();
+        this.respawnEnemy();
+    }
+};
+
+// 每次刷新页面时，自动读取当前敌人的图名
+var _Game_Event_setupPage_CFEnemyAttackMotion = Game_Event.prototype.setupPage;
+Game_Event.prototype.setupPage = function() {
+    _Game_Event_setupPage_CFEnemyAttackMotion.call(this);
+
+    // 当前事件页使用的行走图，视为“正常图”
+    this._enemyNormalCharacterName = this.characterName ? this.characterName() : "";
+    this._enemyAttackCharacterName = this._enemyNormalCharacterName
+        ? this._enemyNormalCharacterName + "_attack"
+        : "";
+};
+
+// 播放敌人攻击动作
+Game_Event.prototype.startEnemyAttackMotion = function(wait) {
+    wait = wait || 18;
+
+    if (!this._enemyNormalCharacterName) {
+        this._enemyNormalCharacterName = this.characterName ? this.characterName() : "";
+    }
+
+    if (!this._enemyNormalCharacterName) return;
+
+    this._enemyAttackCharacterName = this._enemyNormalCharacterName + "_attack";
+
+    // 切换到攻击图
+    this.setImage(this._enemyAttackCharacterName, this.characterIndex());
+
+    // ⭐ 关键：强制从左边第1帧开始
+    this._pattern = 0;
+
+    this._enemyAttackMotionWait = wait;
+    this._enemyAttackMotionTotal = wait;
+    this._enemyMotionPlaying = true;
+};
+
+Game_Event.prototype.updateEnemyAttackMotionPattern = function() {
+    if (!this._enemyMotionPlaying) return;
+
+    var total = Math.max(1, this._enemyAttackMotionTotal || 1);
+    var left = Math.max(0, this._enemyAttackMotionWait || 0);
+    var passed = total - left;
+
+    // 1 -> 2 -> 3 （左到右）
+    if (passed < total / 3) {
+        this._pattern = 0;   // 第1帧（左）
+    } else if (passed < total * 2 / 3) {
+        this._pattern = 1;   // 第2帧（中）
+    } else {
+        this._pattern = 2;   // 第3帧（右）
+    }
+};
+
+// 结束敌人攻击动作
+Game_Event.prototype.endEnemyAttackMotion = function() {
+    if (!this._enemyNormalCharacterName) return;
+
+    this.setImage(this._enemyNormalCharacterName, this.characterIndex());
+    this._enemyAttackMotionWait = 0;
+    this._enemyAttackMotionTotal = 0;
+    this._enemyMotionPlaying = false;
+
+    // 恢复站立帧
+    this._pattern = 1;
+};
+
+// 更新攻击动作计时
+var _Game_Event_update_CFEnemyAttackMotion = Game_Event.prototype.update;
+Game_Event.prototype.update = function() {
+    _Game_Event_update_CFEnemyAttackMotion.call(this);
+
+    if (this._enemyMotionPlaying) {
+        this.updateEnemyAttackMotionPattern();
+
+        if (this._enemyAttackMotionWait > 0) {
+            this._enemyAttackMotionWait--;
+        }
+
+        if (this._enemyAttackMotionWait <= 0) {
+            this.endEnemyAttackMotion();
+        }
+    }
+
+    this.updateQueuedAttackObject();
+    this.updateQueuedDirectSkill();
+    this.updateEnemyAttackLock();
+    this.updateAutoRespawnCountdown();
+};
+
+var _Game_Event_moveStraight_CFEnemyAttackLock = Game_Event.prototype.moveStraight;
+Game_Event.prototype.moveStraight = function(d) {
+    if (this._enemyAttackLocked) {
+        this.setMovementSuccess(false);
+        return;
+    }
+    _Game_Event_moveStraight_CFEnemyAttackLock.call(this, d);
+};
+
+var _Game_Event_moveDiagonally_CFEnemyAttackLock = Game_Event.prototype.moveDiagonally;
+Game_Event.prototype.moveDiagonally = function(horz, vert) {
+    if (this._enemyAttackLocked) {
+        this.setMovementSuccess(false);
+        return;
+    }
+    _Game_Event_moveDiagonally_CFEnemyAttackLock.call(this, horz, vert);
+};
+
+Game_Event.prototype.isPlayerInAttackRange = function() {
+    // 近战开打条件：敌人本体必须已经和玩家贴面
+    // 不能“隔着半步”就开始
+    return cfEnemyNineGridTouchNoCorner(
+        cfEnemyCharX(this),
+        cfEnemyCharY(this),
+        cfEnemyCharX($gamePlayer),
+        cfEnemyCharY($gamePlayer)
+    );
+};
+
+Game_Event.prototype.isPlayerCollidedForAttack = function() {
+    return this.isPlayerInAttackRange();
+};
+
+Game_Event.prototype.enemySkillRange = function(skill) {
+    if (!skill) return 1;
+
+    var note = skill.note || "";
+    var match = note.match(/<range:(\d+)>/i);
+
+    if (match) {
+        return Math.max(1, Number(match[1]));
+    }
+
+    // 没写的话默认 1 格
+    return 1;
+};
+
+Game_Event.prototype.canUseEnemySkillByRange = function(skill) {
+    var range = this.enemySkillRange(skill);
+
+    // 近战/贴脸技能：必须已经贴面才允许起手
+    if (range <= 1) {
+        return this.isPlayerInAttackRange();
+    }
+
+    // 远程/更长距离技能：继续走半步八方向直线判定
+    return this.isPlayerInLineRange(range);
+};
+
+Game_Event.prototype.isPlayerInLineRange = function(range) {
+    range = Math.max(1, range || 1);
+
+    var dir = cfEnemyFacingDir8(this);
+    var vec = cfEnemyVectorFromDir(dir);
+
+    var x = cfEnemyCharX(this);
+    var y = cfEnemyCharY(this);
+
+    var steps = range * 2; // 技能配置仍按“格”，内部按“半步”检查
+
+    for (var i = 1; i <= steps; i++) {
+        x = cfEnemyRoundHalf(x + vec.x * CF_ENEMY_HALF_STEP);
+        y = cfEnemyRoundHalf(y + vec.y * CF_ENEMY_HALF_STEP);
+
+        // 路上被墙挡住就不能打
+        if (!cfEnemyBodyPassable(x, y)) {
+            return false;
+        }
+
+        if (cfEnemyNineGridTouchNoCorner(
+            x, y,
+            cfEnemyCharX($gamePlayer),
+            cfEnemyCharY($gamePlayer)
+        )) {
+            return true;
+        }
+    }
+
+    return false;
+};
+
+Game_Event.prototype.queueEnemyDirectSkill = function(skill, delay) {
+    if (!skill) return false;
+
+    this._pendingDirectSkill = skill;
+    this._pendingDirectSkillDelay = Math.max(0, delay || 0);
+    return true;
+};
+
+Game_Event.prototype.queueEnemyAttackObject = function(skill, delay) {
+    if (!skill) return false;
+
+    this._pendingAttackObjectSkill = skill;
+    this._pendingAttackObjectDelay = Math.max(0, delay || 0);
+    return true;
+};
+
+Game_Event.prototype.updateQueuedDirectSkill = function() {
+    if (!this._pendingDirectSkill) return;
+
+    if (this._pendingDirectSkillDelay > 0) {
+        this._pendingDirectSkillDelay--;
+        return;
+    }
+
+    var skill = this._pendingDirectSkill;
+    this._pendingDirectSkill = null;
+    this._pendingDirectSkillDelay = 0;
+
+    var actor = this.playerBattler();
+    if (!actor || !skill) return;
+
+    // 到真正出手帧时，再判一次：玩家现在还在不在攻击范围内
+    if (!this.canUseEnemySkillByRange(skill)) {
+        return;
+    }
+
+    var result = this.calcSkillDamageToPlayer(skill);
+    if (!result) return;
+
+    if (result.missed) {
+        $gamePlayer.showDamageText("MISS", "#ffffff");
+        return;
+    }
+
+    actor.gainHp(-result.damage);
+
+    if (result.critical) {
+        $gamePlayer.showDamageText(String(result.damage), "#ffff66");
+    } else {
+        $gamePlayer.showDamageText(String(result.damage), "#ff6666");
+    }
+};
+
+Game_Event.prototype.updateQueuedAttackObject = function() {
+    if (!this._pendingAttackObjectSkill) return;
+
+    if (this._pendingAttackObjectDelay > 0) {
+        this._pendingAttackObjectDelay--;
+        return;
+    }
+
+    var skill = this._pendingAttackObjectSkill;
+    this._pendingAttackObjectSkill = null;
+    this._pendingAttackObjectDelay = 0;
+
+    if (this.spawnEnemySkillAttackObject) {
+        this._enemyActiveAttackObject = this.spawnEnemySkillAttackObject(skill);
+    }
+};
+
+if (PluginManager.registerCommand) {
+    PluginManager.registerCommand("CF_Enemy", "EnemyRespawn", function() {
+        var event = $gameMap.event(this._eventId);
+        if (event) {
+            event.respawnEnemy();
+        }
+    });
+
+    PluginManager.registerCommand("CF_Enemy", "EnemyAttackPlayer", function() {
+        var event = $gameMap.event(this._eventId);
+        if (event) {
+            event.attackPlayer();
+        }
+    });
+}
+
+//--------------------------------------------------------------------------
+//敌人死亡逻辑
+//--------------------------------------------------------------------------
+
+Game_Event.prototype.isEnemyDead = function() {
+    return !!this._enemyEntity && this._hp <= 0;
+};
+
+Game_Event.prototype.onEnemyDead = function() {
+    if (this._deadProcessed) return;
+    this._deadProcessed = true;
+
+    this._hp = 0;
+
+var store = this.ensureEnemyStateStore();
+store[this.enemyStateKey()] = {
+    enemyId: this._enemyId,
+    hp: 0,
+    mp: this._enemyEntity ? this._enemyEntity.mp : 0,
+    deadProcessed: true
+};
+
+    if (this._enemyEntity && this._enemyEntity.setHp) {
+        this._enemyEntity.setHp(0);
+    }
+
+    var enemyData = $dataEnemies[this._enemyId];
+    if (enemyData) {
+        var exp = enemyData.exp || 0;
+        if (exp > 0) {
+            var actor = $gameParty.leader();
+            if (actor) {
+                actor.gainExp(exp);
+            }
+        }
+    }
+
+    var keyC = [$gameMap.mapId(), this.eventId(), "C"];
+    $gameSelfSwitches.setValue(keyC, true);
+    if ($gameMap && $gameMap.markEnemyTargetCacheDirty) {
+        $gameMap.markEnemyTargetCacheDirty();
+    }
+};
+
+Game_Event.prototype.resetEnemyDeathState = function() {
+    this._deadProcessed = false;
+
+    var keyC = [$gameMap.mapId(), this.eventId(), "C"];
+    $gameSelfSwitches.setValue(keyC, false);
+
+    var keyD = [$gameMap.mapId(), this.eventId(), "D"];
+    $gameSelfSwitches.setValue(keyD, false);
+};
+
+Game_Event.prototype.applyDamageToEnemy = function(value) {
+    if (!this._enemyEntity) return;
+
+    this._hp = Math.max(0, this._hp - Math.max(0, value || 0));
+
+var store = this.ensureEnemyStateStore();
+store[this.enemyStateKey()] = {
+    enemyId: this._enemyId,
+    hp: this._hp,
+    mp: this._enemyEntity ? this._enemyEntity.mp : 0,
+    deadProcessed: !!this._deadProcessed
+};
+
+    if (this.isEnemyDead()) {
+        this.onEnemyDead();
+    }
+};
+
+Game_Event.prototype.skillCastSeData = function(skill) {
+    if (!skill) return null;
+
+    var note = skill.note || "";
+
+    var fullMatch = note.match(/<se:([^,>]+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(-?\d+)\s*>/i);
+    if (fullMatch) {
+        return {
+            name: String(fullMatch[1]).trim(),
+            volume: Number(fullMatch[2] || 90),
+            pitch: Number(fullMatch[3] || 100),
+            pan: Number(fullMatch[4] || 0)
+        };
+    }
+
+    var simpleMatch = note.match(/<se:([^>]+)>/i);
+    if (simpleMatch) {
+        return {
+            name: String(simpleMatch[1]).trim(),
+            volume: 90,
+            pitch: 100,
+            pan: 0
+        };
+    }
+
+    return null;
+};
+
+Game_Event.prototype.playSkillCastSe = function(skill) {
+    var se = this.skillCastSeData(skill);
+    if (!se || !se.name) return false;
+
+    AudioManager.playSe({
+        name: se.name,
+        volume: se.volume != null ? se.volume : 90,
+        pitch: se.pitch != null ? se.pitch : 100,
+        pan: se.pan != null ? se.pan : 0
+    });
+
+    return true;
+};
+
+// 为 Game_Character 增加一个智能寻路方法
+Game_Character.prototype.smartMoveTowardPlayer = function() {
+    var interval = Math.max(1, CF_ENEMY_SMART_MOVE_INTERVAL || 1);
+
+    if (interval > 1) {
+        if (this._cfSmartMoveThrottle == null) {
+            var seed = 0;
+            if (this instanceof Game_Event && this.eventId) {
+                seed = this.eventId();
+            }
+            this._cfSmartMoveThrottle = seed % interval;
+        }
+
+        if (this._cfSmartMoveThrottle > 0) {
+            this._cfSmartMoveThrottle--;
+            return;
+        }
+
+        this._cfSmartMoveThrottle = interval - 1;
+    }
+
+    var px = cfEnemyCharX($gamePlayer);
+    var py = cfEnemyCharY($gamePlayer);
+    var sx = cfEnemyCharX(this);
+    var sy = cfEnemyCharY(this);
+
+    var offsets = [
+        { x: -1.0, y: -0.5 },
+        { x: -1.0, y:  0.0 },
+        { x: -1.0, y:  0.5 },
+
+        { x:  1.0, y: -0.5 },
+        { x:  1.0, y:  0.0 },
+        { x:  1.0, y:  0.5 },
+
+        { x: -0.5, y: -1.0 },
+        { x:  0.0, y: -1.0 },
+        { x:  0.5, y: -1.0 },
+
+        { x: -0.5, y:  1.0 },
+        { x:  0.0, y:  1.0 },
+        { x:  0.5, y:  1.0 }
+    ];
+
+    var alreadyFace = cfEnemyNineGridTouchNoCorner(sx, sy, px, py);
+
+    if (alreadyFace) {
+        var faceDir = cfEnemyFaceDirByContact(sx, sy, px, py);
+        if (faceDir > 0) {
+            this._cfMoveDir8 = faceDir;
+            this.setDirection(faceDir);
+        }
+        return;
+    }
+
+    var candidates = [];
+    for (var i = 0; i < offsets.length; i++) {
+        var tx = cfEnemyRoundHalf(px + offsets[i].x);
+        var ty = cfEnemyRoundHalf(py + offsets[i].y);
+
+        if (!cfEnemyNineGridTouchNoCorner(tx, ty, px, py)) {
+            continue;
+        }
+
+        if (!cfEnemyBodyPassable(tx, ty)) {
+            continue;
+        }
+
+        var dx = tx - sx;
+        var dy = ty - sy;
+        var score = dx * dx + dy * dy;
+
+        candidates.push({ x: tx, y: ty, score: score });
+    }
+
+    if (candidates.length <= 0) {
+        var fallbackDir = this.findDirectionTo(px, py);
+        if (fallbackDir > 0) {
+            this.moveStraight(fallbackDir);
+        }
+        return;
+    }
+
+    candidates.sort(function(a, b) {
+        return a.score - b.score;
+    });
+
+    var tryCount = Math.min(3, candidates.length);
+    for (var j = 0; j < tryCount; j++) {
+        var c = candidates[j];
+        var dir = this.findDirectionTo(c.x, c.y);
+        if (dir > 0) {
+            this.moveStraight(dir);
+            return;
+        }
+    }
+
+    var direction = this.findDirectionTo(px, py);
+    if (direction > 0) {
+        this.moveStraight(direction);
+    }
+};
+
+
+//=============================================================================
+// CF DotMove Integration
+// 直接内置 DotMoveSystem 兼容：敌人追踪、贴脸距离、远程直线距离。
+//=============================================================================
+var CF_ENEMY_DOTMOVE_MOVE_UNIT = Math.max(0.05, Math.min(1.0, Number(params["DotMoveEnemyMoveUnit"] || 0.5)));
+var CF_ENEMY_DOTMOVE_EPS = 0.00001;
+var CF_ENEMY_DOTMOVE_DIAG = Math.SQRT1_2 || (1 / Math.sqrt(2));
+
+function cfEnemyHasDotMove(ch) {
+    return typeof DotMoveSystem !== "undefined" &&
+        ch &&
+        typeof ch.setMoveUnit === "function" &&
+        typeof ch.moveByDirection === "function" &&
+        typeof ch.dotMoveToPlayer === "function";
+}
+
+function cfEnemyIsLiveDotMoveEnemy(ch) {
+    return ch instanceof Game_Event && !!ch._enemyEntity && ch._hp > 0;
+}
+
+function cfEnemyDotCharX(ch) {
+    if (!ch) return 0;
+    if (ch._realX != null) return Number(ch._realX || 0);
+    if (ch._x != null) return Number(ch._x || 0);
+    return Number(ch.x || 0);
+}
+
+function cfEnemyDotCharY(ch) {
+    if (!ch) return 0;
+    if (ch._realY != null) return Number(ch._realY || 0);
+    if (ch._y != null) return Number(ch._y || 0);
+    return Number(ch.y || 0);
+}
+
+function cfEnemyDotWidth(ch) {
+    if (!ch) return 1;
+    if (typeof ch.width === "function") return Math.max(0.1, Number(ch.width() || 1));
+    return 1;
+}
+
+function cfEnemyDotHeight(ch) {
+    if (!ch) return 1;
+    if (typeof ch.height === "function") return Math.max(0.1, Number(ch.height() || 1));
+    return 1;
+}
+
+function cfEnemyDotCenterX(ch) {
+    if (!ch) return 0;
+    if (typeof ch.centerRealX === "function") return Number(ch.centerRealX() || 0);
+    return cfEnemyDotCharX(ch) + cfEnemyDotWidth(ch) / 2;
+}
+
+function cfEnemyDotCenterY(ch) {
+    if (!ch) return 0;
+    if (typeof ch.centerRealY === "function") return Number(ch.centerRealY() || 0);
+    return cfEnemyDotCharY(ch) + cfEnemyDotHeight(ch) / 2;
+}
+
+function cfEnemyDotRadius(ch) {
+    return Math.max(cfEnemyDotWidth(ch), cfEnemyDotHeight(ch)) * 0.5;
+}
+
+function cfEnemyDotVectorFromDir(d) {
+    switch (d) {
+        case 1: return { x: -CF_ENEMY_DOTMOVE_DIAG, y:  CF_ENEMY_DOTMOVE_DIAG };
+        case 2: return { x: 0,                     y:  1 };
+        case 3: return { x:  CF_ENEMY_DOTMOVE_DIAG, y:  CF_ENEMY_DOTMOVE_DIAG };
+        case 4: return { x: -1,                    y:  0 };
+        case 6: return { x:  1,                    y:  0 };
+        case 7: return { x: -CF_ENEMY_DOTMOVE_DIAG, y: -CF_ENEMY_DOTMOVE_DIAG };
+        case 8: return { x: 0,                     y: -1 };
+        case 9: return { x:  CF_ENEMY_DOTMOVE_DIAG, y: -CF_ENEMY_DOTMOVE_DIAG };
+        default: return { x: 0, y: 0 };
+    }
+}
+
+function cfEnemyDotDir8FromDelta(dx, dy) {
+    var ax = Math.abs(dx);
+    var ay = Math.abs(dy);
+    var x = ax < 0.001 ? 0 : (dx > 0 ? 1 : -1);
+    var y = ay < 0.001 ? 0 : (dy > 0 ? 1 : -1);
+
+    if (x === -1 && y ===  1) return 1;
+    if (x ===  0 && y ===  1) return 2;
+    if (x ===  1 && y ===  1) return 3;
+    if (x === -1 && y ===  0) return 4;
+    if (x ===  1 && y ===  0) return 6;
+    if (x === -1 && y === -1) return 7;
+    if (x ===  0 && y === -1) return 8;
+    if (x ===  1 && y === -1) return 9;
+    return 0;
+}
+
+function cfEnemyDotVisualDir4FromDir8(dir8) {
+    switch (dir8) {
+        case 1:
+        case 7:
+        case 4:
+            return 4;
+        case 3:
+        case 9:
+        case 6:
+            return 6;
+        case 8:
+            return 8;
+        case 2:
+            return 2;
+        default:
+            return 0;
+    }
+}
+
+function cfEnemyDotFacePlayer(ch) {
+    if (!ch || !$gamePlayer) return;
+    var dx = cfEnemyDotCenterX($gamePlayer) - cfEnemyDotCenterX(ch);
+    var dy = cfEnemyDotCenterY($gamePlayer) - cfEnemyDotCenterY(ch);
+    var dir8 = cfEnemyDotDir8FromDelta(dx, dy);
+    if (dir8 <= 0) return;
+
+    ch._cfMoveDir8 = dir8;
+
+    var dir4 = cfEnemyDotVisualDir4FromDir8(dir8);
+    if (dir4 > 0 && typeof ch.setDirection === "function") {
+        ch.setDirection(dir4);
+    }
+}
+
+function cfEnemyDotDirToHV(d) {
+    switch (d) {
+        case 1: return [4, 2];
+        case 3: return [6, 2];
+        case 7: return [4, 8];
+        case 9: return [6, 8];
+        default: return [0, 0];
+    }
+}
+
+function cfEnemyDotMapPassableAtCenter(cx, cy, d) {
+    var tx = Math.floor(cx);
+    var ty = Math.floor(cy);
+
+    if (!$gameMap || !$gameMap.isValid(tx, ty)) return false;
+
+    if (d === 1 || d === 3 || d === 7 || d === 9) {
+        var hv = cfEnemyDotDirToHV(d);
+        return $gameMap.isPassable(tx, ty, hv[0]) && $gameMap.isPassable(tx, ty, hv[1]);
+    }
+
+    return $gameMap.isPassable(tx, ty, d || 2);
+}
+
+function cfEnemyDotTouchRange(a, b) {
+    return cfEnemyDotRadius(a) + cfEnemyDotRadius(b) + 0.08;
+}
+
+function cfEnemyDotInAttackRange(enemy, target) {
+    if (!enemy || !target) return false;
+    var dx = cfEnemyDotCenterX(target) - cfEnemyDotCenterX(enemy);
+    var dy = cfEnemyDotCenterY(target) - cfEnemyDotCenterY(enemy);
+    var range = cfEnemyDotTouchRange(enemy, target);
+    return (dx * dx + dy * dy) <= range * range;
+}
+
+function cfEnemyDotPlayerTargetX() {
+    return $gamePlayer && $gamePlayer._realX != null ? Number($gamePlayer._realX || 0) : ($gamePlayer ? $gamePlayer.x : 0);
+}
+
+function cfEnemyDotPlayerTargetY() {
+    return $gamePlayer && $gamePlayer._realY != null ? Number($gamePlayer._realY || 0) : ($gamePlayer ? $gamePlayer.y : 0);
+}
+
+// CF 战斗逻辑用这个读取 8 方向；没有 CF_EightDirHalfStep 时也能正常工作。
+if (!Game_CharacterBase.prototype.cfInteractionDirection) {
+    Game_CharacterBase.prototype.cfInteractionDirection = function() {
+        return this._cfMoveDir8 || this.direction();
+    };
+}
+
+var _CF_Enemy_smartMoveTowardPlayer_Original = Game_Character.prototype.smartMoveTowardPlayer;
+Game_Character.prototype.smartMoveTowardPlayer = function() {
+    if (!cfEnemyIsLiveDotMoveEnemy(this) || !cfEnemyHasDotMove(this)) {
+        if (_CF_Enemy_smartMoveTowardPlayer_Original) {
+            return _CF_Enemy_smartMoveTowardPlayer_Original.call(this);
+        }
+        return;
+    }
+
+    if (this.isEnemyAttackBusy && this.isEnemyAttackBusy()) return;
+    if (this._enemyAttackLocked) return;
+
+    this.setMoveUnit(CF_ENEMY_DOTMOVE_MOVE_UNIT);
+
+    if (cfEnemyDotInAttackRange(this, $gamePlayer)) {
+        if (typeof this.cancelMove === "function") this.cancelMove();
+        cfEnemyDotFacePlayer(this);
+        return;
+    }
+
+    var dir = 0;
+    if (typeof this.findDirectionTo === "function") {
+        dir = this.findDirectionTo(cfEnemyDotPlayerTargetX(), cfEnemyDotPlayerTargetY());
+    }
+
+    if ([1, 2, 3, 4, 6, 7, 8, 9].indexOf(dir) >= 0) {
+        this._cfMoveDir8 = dir;
+        this.moveByDirection(dir);
+        return;
+    }
+
+    // 兜底：寻路失败时直接朝玩家方向推进，交给 DotMove 的碰撞/滑墙处理。
+    cfEnemyDotFacePlayer(this);
+    this.dotMoveToPlayer();
+};
+
+var _CF_Enemy_isPlayerInAttackRange_Original = Game_Event.prototype.isPlayerInAttackRange;
+Game_Event.prototype.isPlayerInAttackRange = function() {
+    if (!cfEnemyIsLiveDotMoveEnemy(this) || !cfEnemyHasDotMove(this)) {
+        return _CF_Enemy_isPlayerInAttackRange_Original ? _CF_Enemy_isPlayerInAttackRange_Original.call(this) : false;
+    }
+    return cfEnemyDotInAttackRange(this, $gamePlayer);
+};
+
+var _CF_Enemy_isPlayerInLineRange_Original = Game_Event.prototype.isPlayerInLineRange;
+Game_Event.prototype.isPlayerInLineRange = function(range) {
+    if (!cfEnemyIsLiveDotMoveEnemy(this) || !cfEnemyHasDotMove(this)) {
+        return _CF_Enemy_isPlayerInLineRange_Original ? _CF_Enemy_isPlayerInLineRange_Original.call(this, range) : false;
+    }
+
+    range = Math.max(1, Number(range || 1));
+
+    var dir = this.cfInteractionDirection ? this.cfInteractionDirection() : this.direction();
+    var vec = cfEnemyDotVectorFromDir(dir);
+    var sx = cfEnemyDotCenterX(this);
+    var sy = cfEnemyDotCenterY(this);
+    var px = cfEnemyDotCenterX($gamePlayer);
+    var py = cfEnemyDotCenterY($gamePlayer);
+
+    var dx = px - sx;
+    var dy = py - sy;
+    var forward = dx * vec.x + dy * vec.y;
+    var lateral = Math.abs(dx * vec.y - dy * vec.x);
+    var targetRadius = cfEnemyDotRadius($gamePlayer);
+    var bodyRadius = cfEnemyDotRadius(this);
+    var width = Math.max(0.45, bodyRadius + targetRadius * 0.65);
+
+    if (forward < -0.05) return false;
+    if (forward > range + targetRadius + 0.15) return false;
+    if (lateral > width) return false;
+
+    // 简单墙体遮挡采样：从敌人中心到玩家方向每 0.25 格检查一次。
+    var step = 0.25;
+    var dist = Math.min(range, Math.max(0, forward));
+    for (var moved = step; moved <= dist; moved += step) {
+        var cx = sx + vec.x * moved;
+        var cy = sy + vec.y * moved;
+        if (!cfEnemyDotMapPassableAtCenter(cx, cy, dir)) {
+            return false;
+        }
+    }
+
+    return true;
+};
+
+})();
+//=============================================================================
+// CF DotMove Integration v2
+// Rectangle-to-rectangle chase and melee contact correction.
+// This section keeps 8-direction logic for movement/ranged skills, but forces
+// range-1 melee attacks to use a real side contact instead of diagonal corners.
+//=============================================================================
+(function() {
+    "use strict";
+
+    var V2_EPS = 0.00001;
+    var V2_MELEE_GAP = 0.08;
+    var V2_APPROACH_GAP = 0.03;
+    var V2_DIAG = Math.SQRT1_2 || (1 / Math.sqrt(2));
+    var V2_PARAMS = PluginManager.parameters("CF_Enemy") || {};
+    var V2_MOVE_UNIT = Math.max(0.05, Math.min(1.0, Number(V2_PARAMS["DotMoveEnemyMoveUnit"] || 0.5)));
+
+    function hasDotMove(ch) {
+        return typeof DotMoveSystem !== "undefined" &&
+            ch &&
+            typeof ch.setMoveUnit === "function" &&
+            typeof ch.moveToTarget === "function" &&
+            typeof ch.dotMoveByDeg === "function";
+    }
+
+    function isLiveEnemy(ch) {
+        return ch instanceof Game_Event && !!ch._enemyEntity && ch._hp > 0;
+    }
+
+    function valueOr(value, defaultValue) {
+        var n = Number(value);
+        return Number.isFinite(n) ? n : defaultValue;
+    }
+
+    function charX(ch) {
+        if (!ch) return 0;
+        if (ch._realX != null) return valueOr(ch._realX, 0);
+        if (ch._x != null) return valueOr(ch._x, 0);
+        return valueOr(ch.x, 0);
+    }
+
+    function charY(ch) {
+        if (!ch) return 0;
+        if (ch._realY != null) return valueOr(ch._realY, 0);
+        if (ch._y != null) return valueOr(ch._y, 0);
+        return valueOr(ch.y, 0);
+    }
+
+    function charWidth(ch) {
+        if (!ch) return 1;
+        if (typeof ch.width === "function") return Math.max(0.1, valueOr(ch.width(), 1));
+        return 1;
+    }
+
+    function charHeight(ch) {
+        if (!ch) return 1;
+        if (typeof ch.height === "function") return Math.max(0.1, valueOr(ch.height(), 1));
+        return 1;
+    }
+
+    function rectOf(ch) {
+        if (!ch) return { x: 0, y: 0, width: 1, height: 1 };
+        if (typeof ch.collisionRect === "function") {
+            var r = ch.collisionRect();
+            if (r) {
+                return {
+                    x: valueOr(r.x, charX(ch)),
+                    y: valueOr(r.y, charY(ch)),
+                    width: Math.max(0.1, valueOr(r.width, charWidth(ch))),
+                    height: Math.max(0.1, valueOr(r.height, charHeight(ch)))
+                };
+            }
+        }
+        return { x: charX(ch), y: charY(ch), width: charWidth(ch), height: charHeight(ch) };
+    }
+
+    function rectX2(r) { return r.x + r.width; }
+    function rectY2(r) { return r.y + r.height; }
+    function rectCX(r) { return r.x + r.width / 2; }
+    function rectCY(r) { return r.y + r.height / 2; }
+
+    function gapX(a, b) {
+        if (rectX2(a) < b.x) return b.x - rectX2(a);
+        if (rectX2(b) < a.x) return a.x - rectX2(b);
+        return 0;
+    }
+
+    function gapY(a, b) {
+        if (rectY2(a) < b.y) return b.y - rectY2(a);
+        if (rectY2(b) < a.y) return a.y - rectY2(b);
+        return 0;
+    }
+
+    function overlapX(a, b) {
+        return Math.max(0, Math.min(rectX2(a), rectX2(b)) - Math.max(a.x, b.x));
+    }
+
+    function overlapY(a, b) {
+        return Math.max(0, Math.min(rectY2(a), rectY2(b)) - Math.max(a.y, b.y));
+    }
+
+    function minSideOverlapX(a, b) {
+        return Math.min(a.width, b.width) * 0.25;
+    }
+
+    function minSideOverlapY(a, b) {
+        return Math.min(a.height, b.height) * 0.25;
+    }
+
+    function clamp(value, min, max) {
+        if (min > max) return (min + max) / 2;
+        return Math.max(min, Math.min(max, value));
+    }
+
+    function direction8FromDelta(dx, dy) {
+        var ax = Math.abs(dx);
+        var ay = Math.abs(dy);
+        var x = ax < 0.001 ? 0 : (dx > 0 ? 1 : -1);
+        var y = ay < 0.001 ? 0 : (dy > 0 ? 1 : -1);
+
+        if (x === -1 && y ===  1) return 1;
+        if (x ===  0 && y ===  1) return 2;
+        if (x ===  1 && y ===  1) return 3;
+        if (x === -1 && y ===  0) return 4;
+        if (x ===  1 && y ===  0) return 6;
+        if (x === -1 && y === -1) return 7;
+        if (x ===  0 && y === -1) return 8;
+        if (x ===  1 && y === -1) return 9;
+        return 0;
+    }
+
+    function visualDir4FromDir8(dir8) {
+        switch (dir8) {
+            case 1:
+            case 4:
+            case 7:
+                return 4;
+            case 3:
+            case 6:
+            case 9:
+                return 6;
+            case 2:
+                return 2;
+            case 8:
+                return 8;
+            default:
+                return 0;
+        }
+    }
+
+    function vectorFromDir(d) {
+        switch (d) {
+            case 1: return { x: -V2_DIAG, y:  V2_DIAG };
+            case 2: return { x: 0,        y:  1 };
+            case 3: return { x:  V2_DIAG, y:  V2_DIAG };
+            case 4: return { x: -1,       y:  0 };
+            case 6: return { x:  1,       y:  0 };
+            case 7: return { x: -V2_DIAG, y: -V2_DIAG };
+            case 8: return { x: 0,        y: -1 };
+            case 9: return { x:  V2_DIAG, y: -V2_DIAG };
+            default: return { x: 0, y: 0 };
+        }
+    }
+
+    function setLogicAndVisualDirection(ch, dir8) {
+        if (!ch || dir8 <= 0) return;
+        ch._cfMoveDir8 = dir8;
+        var dir4 = visualDir4FromDir8(dir8);
+        if (dir4 > 0 && typeof ch.setDirection === "function") {
+            ch.setDirection(dir4);
+        }
+    }
+
+    function meleeContactInfo(enemy, target) {
+        var er = rectOf(enemy);
+        var tr = rectOf(target);
+        var gx = gapX(er, tr);
+        var gy = gapY(er, tr);
+        var ox = overlapX(er, tr);
+        var oy = overlapY(er, tr);
+        var sideY = Math.max(minSideOverlapY(er, tr), 0.05);
+        var sideX = Math.max(minSideOverlapX(er, tr), 0.05);
+
+        var horizontal = gx <= V2_MELEE_GAP && oy >= sideY;
+        var vertical = gy <= V2_MELEE_GAP && ox >= sideX;
+
+        if (!horizontal && !vertical) {
+            return { ok: false, dir: 0, horizontal: false, vertical: false };
+        }
+
+        var dx = rectCX(tr) - rectCX(er);
+        var dy = rectCY(tr) - rectCY(er);
+        var dir = 0;
+
+        if (horizontal && vertical) {
+            if (gx > gy) dir = dx >= 0 ? 6 : 4;
+            else if (gy > gx) dir = dy >= 0 ? 2 : 8;
+            else dir = Math.abs(dx) >= Math.abs(dy) ? (dx >= 0 ? 6 : 4) : (dy >= 0 ? 2 : 8);
+        } else if (horizontal) {
+            dir = dx >= 0 ? 6 : 4;
+        } else {
+            dir = dy >= 0 ? 2 : 8;
+        }
+
+        return { ok: true, dir: dir, horizontal: horizontal, vertical: vertical };
+    }
+
+    function approachDirection(enemy, target) {
+        var er = rectOf(enemy);
+        var tr = rectOf(target);
+        var gx = gapX(er, tr);
+        var gy = gapY(er, tr);
+        var dx = rectCX(tr) - rectCX(er);
+        var dy = rectCY(tr) - rectCY(er);
+
+        if (gx <= V2_MELEE_GAP && gy <= V2_MELEE_GAP) {
+            return Math.abs(dx) >= Math.abs(dy) ? (dx >= 0 ? 6 : 4) : (dy >= 0 ? 2 : 8);
+        }
+
+        if (gx > 0 && gy > 0) {
+            // When both axes are separated, keep moving diagonally, but do not
+            // allow melee to fire until a real side overlap exists.
+            return direction8FromDelta(dx, dy);
+        }
+
+        if (gx > 0) return dx >= 0 ? 6 : 4;
+        if (gy > 0) return dy >= 0 ? 2 : 8;
+        return direction8FromDelta(dx, dy);
+    }
+
+    function bodyPassableForRect(x, y, width, height) {
+        if (!$gameMap) return true;
+
+        var points = [
+            { x: x + 0.02, y: y + 0.02 },
+            { x: x + width - 0.02, y: y + 0.02 },
+            { x: x + 0.02, y: y + height - 0.02 },
+            { x: x + width - 0.02, y: y + height - 0.02 }
+        ];
+
+        for (var i = 0; i < points.length; i++) {
+            var tx = Math.floor(points[i].x);
+            var ty = Math.floor(points[i].y);
+            if (!$gameMap.isValid(tx, ty)) return false;
+
+            var passable =
+                $gameMap.isPassable(tx, ty, 2) ||
+                $gameMap.isPassable(tx, ty, 4) ||
+                $gameMap.isPassable(tx, ty, 6) ||
+                $gameMap.isPassable(tx, ty, 8);
+
+            if (!passable) return false;
+        }
+
+        return true;
+    }
+
+    function approachCandidates(enemy, target) {
+        var er = rectOf(enemy);
+        var tr = rectOf(target);
+        var ew = er.width;
+        var eh = er.height;
+        var minOX = Math.max(minSideOverlapX(er, tr), 0.05);
+        var minOY = Math.max(minSideOverlapY(er, tr), 0.05);
+        var list = [];
+
+        function add(x, y, dir) {
+            if (!bodyPassableForRect(x, y, ew, eh)) return;
+            var dx = x - er.x;
+            var dy = y - er.y;
+            list.push({ x: x, y: y, dir: dir, score: dx * dx + dy * dy });
+        }
+
+        var yMin = tr.y - eh + minOY;
+        var yMax = rectY2(tr) - minOY;
+        var xMin = tr.x - ew + minOX;
+        var xMax = rectX2(tr) - minOX;
+
+        var preferredY = clamp(er.y, yMin, yMax);
+        var preferredX = clamp(er.x, xMin, xMax);
+        var centerY = clamp(rectCY(tr) - eh / 2, yMin, yMax);
+        var centerX = clamp(rectCX(tr) - ew / 2, xMin, xMax);
+
+        add(tr.x - ew - V2_APPROACH_GAP, preferredY, 6);
+        add(tr.x - ew - V2_APPROACH_GAP, centerY, 6);
+        add(rectX2(tr) + V2_APPROACH_GAP, preferredY, 4);
+        add(rectX2(tr) + V2_APPROACH_GAP, centerY, 4);
+        add(preferredX, tr.y - eh - V2_APPROACH_GAP, 2);
+        add(centerX, tr.y - eh - V2_APPROACH_GAP, 2);
+        add(preferredX, rectY2(tr) + V2_APPROACH_GAP, 8);
+        add(centerX, rectY2(tr) + V2_APPROACH_GAP, 8);
+
+        list.sort(function(a, b) { return a.score - b.score; });
+        return list;
+    }
+
+    function bestApproachPoint(enemy, target) {
+        var candidates = approachCandidates(enemy, target);
+        if (candidates.length > 0) return candidates[0];
+
+        var er = rectOf(enemy);
+        var tr = rectOf(target);
+        return {
+            x: tr.x,
+            y: tr.y,
+            dir: direction8FromDelta(rectCX(tr) - rectCX(er), rectCY(tr) - rectCY(er)),
+            score: 0
+        };
+    }
+
+    function mapPassableAtCenter(cx, cy, d) {
+        if (!$gameMap) return false;
+        var tx = Math.floor(cx);
+        var ty = Math.floor(cy);
+        if (!$gameMap.isValid(tx, ty)) return false;
+
+        if (d === 1 || d === 3 || d === 7 || d === 9) {
+            var h = d === 1 || d === 7 ? 4 : 6;
+            var v = d === 7 || d === 9 ? 8 : 2;
+            return $gameMap.isPassable(tx, ty, h) && $gameMap.isPassable(tx, ty, v);
+        }
+
+        return $gameMap.isPassable(tx, ty, d || 2);
+    }
+
+    function dotMoveTowardPoint(ch, x, y) {
+        var r = rectOf(ch);
+        var dx = x - r.x;
+        var dy = y - r.y;
+        var far = Math.sqrt(dx * dx + dy * dy);
+        if (far <= 0.01) return;
+
+        var rad = Math.atan2(dy, dx);
+        var deg = (rad * 180 / Math.PI) + 90;
+        if (deg < 0) deg += 360;
+        if (deg >= 360) deg %= 360;
+
+        if (typeof ch.dotMoveByDeg === "function") {
+            ch.dotMoveByDeg(deg);
+        } else if (typeof ch.moveToTarget === "function") {
+            ch.moveToTarget(x, y);
+        }
+    }
+
+    function directionForRanged(enemy, target) {
+        var er = rectOf(enemy);
+        var tr = rectOf(target);
+        return direction8FromDelta(rectCX(tr) - rectCX(er), rectCY(tr) - rectCY(er));
+    }
+
+    if (!Game_CharacterBase.prototype.cfInteractionDirection) {
+        Game_CharacterBase.prototype.cfInteractionDirection = function() {
+            return this._cfMoveDir8 || this.direction();
+        };
+    }
+
+    Game_Character.prototype.smartMoveTowardPlayer = function() {
+        if (!isLiveEnemy(this) || !hasDotMove(this)) {
+            if (typeof this.moveTowardPlayer === "function") this.moveTowardPlayer();
+            return;
+        }
+
+        if (this.isEnemyAttackBusy && this.isEnemyAttackBusy()) return;
+        if (this._enemyAttackLocked) return;
+        if (!$gamePlayer) return;
+
+        var contact = meleeContactInfo(this, $gamePlayer);
+        if (contact.ok) {
+            if (typeof this.cancelMove === "function") this.cancelMove();
+            setLogicAndVisualDirection(this, contact.dir);
+            return;
+        }
+
+        this.setMoveUnit(V2_MOVE_UNIT);
+
+        var point = bestApproachPoint(this, $gamePlayer);
+        var dir = approachDirection(this, $gamePlayer);
+        if (dir > 0) setLogicAndVisualDirection(this, dir);
+
+        // Use direct DotMove movement toward a rectangle side point. This avoids
+        // A* receiving fractional boundary coordinates when the player stands
+        // exactly on a tile seam.
+        dotMoveTowardPoint(this, point.x, point.y);
+    };
+
+    Game_Event.prototype.isPlayerInAttackRange = function() {
+        if (!isLiveEnemy(this) || !hasDotMove(this) || !$gamePlayer) return false;
+        return meleeContactInfo(this, $gamePlayer).ok;
+    };
+
+    Game_Event.prototype.isPlayerCollidedForAttack = function() {
+        return this.isPlayerInAttackRange();
+    };
+
+    Game_Event.prototype.isPlayerInLineRange = function(range) {
+        if (!isLiveEnemy(this) || !hasDotMove(this) || !$gamePlayer) return false;
+
+        range = Math.max(1, Number(range || 1));
+
+        var dir = this.cfInteractionDirection ? this.cfInteractionDirection() : this.direction();
+        var vec = vectorFromDir(dir);
+        var er = rectOf(this);
+        var tr = rectOf($gamePlayer);
+        var sx = rectCX(er);
+        var sy = rectCY(er);
+        var tx = rectCX(tr);
+        var ty = rectCY(tr);
+
+        var dx = tx - sx;
+        var dy = ty - sy;
+        var forward = dx * vec.x + dy * vec.y;
+        var lateral = Math.abs(dx * vec.y - dy * vec.x);
+        var bodyWidth = Math.max(er.width, er.height) * 0.5;
+        var targetWidth = Math.max(tr.width, tr.height) * 0.5;
+        var allowedLateral = Math.max(0.35, bodyWidth + targetWidth * 0.55);
+
+        if (forward < -0.05) return false;
+        if (forward > range + targetWidth + 0.15) return false;
+        if (lateral > allowedLateral) return false;
+
+        var step = 0.25;
+        var dist = Math.min(range, Math.max(0, forward));
+        for (var moved = step; moved <= dist; moved += step) {
+            var cx = sx + vec.x * moved;
+            var cy = sy + vec.y * moved;
+            if (!mapPassableAtCenter(cx, cy, dir)) return false;
+        }
+
+        return true;
+    };
+
+    Game_Event.prototype.attackPlayer = function() {
+        if (!this._enemyEntity) return false;
+
+        var actor = this.playerBattler();
+        if (!actor) return false;
+
+        if (this._attackCooldown == null) this._attackCooldown = 0;
+        if (this._attackCooldown > 0) return false;
+
+        if (this.isMoving && this.isMoving()) return false;
+        if (this.isEnemyAttackBusy && this.isEnemyAttackBusy()) return false;
+
+        var action = this.selectEnemyActionByRating();
+        if (!action) return false;
+
+        var skillId = action.skillId;
+        var skill = $dataSkills[skillId];
+        if (!skill) return false;
+
+        var range = this.enemySkillRange ? this.enemySkillRange(skill) : 1;
+        if (range <= 1) {
+            var contact = meleeContactInfo(this, $gamePlayer);
+            if (!contact.ok) return false;
+            setLogicAndVisualDirection(this, contact.dir);
+        } else {
+            var dir8 = directionForRanged(this, $gamePlayer);
+            if (dir8 > 0) setLogicAndVisualDirection(this, dir8);
+            if (!this.canUseEnemySkillByRange(skill)) return false;
+        }
+
+        return this.useEnemySkillOnPlayer(skillId);
+    };
+
+})();
+
+//=============================================================================
+// CF DotMove Integration v3
+// Stable melee facing on tile seams.
+// Fixes the case where player/enemy are already touching while both stand on a
+// tile boundary: melee facing is resolved from collision-rectangle edges first,
+// not from rounded grid points or ambiguous center snapping.
+//=============================================================================
+(function() {
+    "use strict";
+
+    var CF_SEAM_EPS = 0.00001;
+    var CF_SEAM_CONTACT_GAP = 0.10;
+    var CF_SEAM_MIN_OVERLAP = 0.001;
+    var CF_SEAM_DIAG_GAP = 0.10;
+
+    function hasDotMove(ch) {
+        return typeof DotMoveSystem !== "undefined" &&
+            ch &&
+            typeof ch.collisionRect === "function";
+    }
+
+    function isLiveEnemy(ch) {
+        return ch instanceof Game_Event && !!ch._enemyEntity && ch._hp > 0;
+    }
+
+    function num(value, fallback) {
+        var n = Number(value);
+        return Number.isFinite(n) ? n : fallback;
+    }
+
+    function rectOf(ch) {
+        if (ch && typeof ch.collisionRect === "function") {
+            var r = ch.collisionRect();
+            if (r) {
+                return {
+                    x: num(r.x, ch._realX || ch.x || 0),
+                    y: num(r.y, ch._realY || ch.y || 0),
+                    width: Math.max(0.1, num(r.width, 1)),
+                    height: Math.max(0.1, num(r.height, 1))
+                };
+            }
+        }
+        return {
+            x: num(ch && (ch._realX != null ? ch._realX : ch.x), 0),
+            y: num(ch && (ch._realY != null ? ch._realY : ch.y), 0),
+            width: 1,
+            height: 1
+        };
+    }
+
+    function x2(r) { return r.x + r.width; }
+    function y2(r) { return r.y + r.height; }
+    function cx(r) { return r.x + r.width / 2; }
+    function cy(r) { return r.y + r.height / 2; }
+
+    function gapX(a, b) {
+        if (x2(a) < b.x) return b.x - x2(a);
+        if (x2(b) < a.x) return a.x - x2(b);
+        return 0;
+    }
+
+    function gapY(a, b) {
+        if (y2(a) < b.y) return b.y - y2(a);
+        if (y2(b) < a.y) return a.y - y2(b);
+        return 0;
+    }
+
+    function overlapX(a, b) {
+        return Math.max(0, Math.min(x2(a), x2(b)) - Math.max(a.x, b.x));
+    }
+
+    function overlapY(a, b) {
+        return Math.max(0, Math.min(y2(a), y2(b)) - Math.max(a.y, b.y));
+    }
+
+    function direction8FromDelta(dx, dy) {
+        var ax = Math.abs(dx);
+        var ay = Math.abs(dy);
+        var sx = ax < 0.001 ? 0 : (dx > 0 ? 1 : -1);
+        var sy = ay < 0.001 ? 0 : (dy > 0 ? 1 : -1);
+
+        if (sx === -1 && sy ===  1) return 1;
+        if (sx ===  0 && sy ===  1) return 2;
+        if (sx ===  1 && sy ===  1) return 3;
+        if (sx === -1 && sy ===  0) return 4;
+        if (sx ===  1 && sy ===  0) return 6;
+        if (sx === -1 && sy === -1) return 7;
+        if (sx ===  0 && sy === -1) return 8;
+        if (sx ===  1 && sy === -1) return 9;
+        return 0;
+    }
+
+    function visualDir4(dir8) {
+        switch (dir8) {
+            case 1:
+            case 4:
+            case 7:
+                return 4;
+            case 3:
+            case 6:
+            case 9:
+                return 6;
+            case 2:
+                return 2;
+            case 8:
+                return 8;
+            default:
+                return 0;
+        }
+    }
+
+    function setAttackDirection(ch, dir8) {
+        if (!ch || dir8 <= 0) return;
+        ch._cfMoveDir8 = dir8;
+        ch._cfAttackDir8 = dir8;
+        var dir4 = visualDir4(dir8);
+        if (dir4 > 0 && typeof ch.setDirection === "function") {
+            ch.setDirection(dir4);
+        }
+    }
+
+    function stableMeleeContact(enemy, target) {
+        var er = rectOf(enemy);
+        var tr = rectOf(target);
+        var gx = gapX(er, tr);
+        var gy = gapY(er, tr);
+        var ox = overlapX(er, tr);
+        var oy = overlapY(er, tr);
+        var dx = cx(tr) - cx(er);
+        var dy = cy(tr) - cy(er);
+
+        // True side contact has priority over center-point guessing.
+        // Example fixed here:
+        // player and enemy both on the same X seam, enemy below player:
+        // X overlaps, Y edge touches => dir 8, always.
+        var verticalTouch = gy <= CF_SEAM_CONTACT_GAP && ox > CF_SEAM_MIN_OVERLAP;
+        var horizontalTouch = gx <= CF_SEAM_CONTACT_GAP && oy > CF_SEAM_MIN_OVERLAP;
+
+        if (verticalTouch && !horizontalTouch) {
+            return { ok: true, dir: dy >= 0 ? 2 : 8, kind: "vertical" };
+        }
+
+        if (horizontalTouch && !verticalTouch) {
+            return { ok: true, dir: dx >= 0 ? 6 : 4, kind: "horizontal" };
+        }
+
+        if (verticalTouch && horizontalTouch) {
+            // If bodies overlap on both axes, pick the stronger center separation.
+            // This keeps standing on a seam stable: dx near 0, dy non-zero => up/down.
+            if (Math.abs(dy) >= Math.abs(dx)) {
+                return { ok: true, dir: dy >= 0 ? 2 : 8, kind: "vertical-overlap" };
+            }
+            return { ok: true, dir: dx >= 0 ? 6 : 4, kind: "horizontal-overlap" };
+        }
+
+        // Diagonal contact is allowed, but only when both rectangle gaps are
+        // actually close. This avoids random diagonal facing from far away.
+        if (gx <= CF_SEAM_DIAG_GAP && gy <= CF_SEAM_DIAG_GAP) {
+            var d = direction8FromDelta(dx, dy);
+            if (d > 0) return { ok: true, dir: d, kind: "diagonal" };
+        }
+
+        return { ok: false, dir: 0, kind: "none" };
+    }
+
+    var _CF_Enemy_v3_smartMoveTowardPlayer = Game_Character.prototype.smartMoveTowardPlayer;
+    Game_Character.prototype.smartMoveTowardPlayer = function() {
+        if (isLiveEnemy(this) && hasDotMove(this) && $gamePlayer) {
+            var contact = stableMeleeContact(this, $gamePlayer);
+            if (contact.ok) {
+                if (typeof this.cancelMove === "function") this.cancelMove();
+                setAttackDirection(this, contact.dir);
+                return;
+            }
+        }
+        return _CF_Enemy_v3_smartMoveTowardPlayer.call(this);
+    };
+
+    var _CF_Enemy_v3_isPlayerInAttackRange = Game_Event.prototype.isPlayerInAttackRange;
+    Game_Event.prototype.isPlayerInAttackRange = function() {
+        if (isLiveEnemy(this) && hasDotMove(this) && $gamePlayer) {
+            return stableMeleeContact(this, $gamePlayer).ok;
+        }
+        return _CF_Enemy_v3_isPlayerInAttackRange.call(this);
+    };
+
+    Game_Event.prototype.isPlayerCollidedForAttack = function() {
+        return this.isPlayerInAttackRange();
+    };
+
+    var _CF_Enemy_v3_attackPlayer = Game_Event.prototype.attackPlayer;
+    Game_Event.prototype.attackPlayer = function() {
+        if (!isLiveEnemy(this) || !hasDotMove(this) || !$gamePlayer) {
+            return _CF_Enemy_v3_attackPlayer.call(this);
+        }
+
+        if (!this._enemyEntity) return false;
+
+        var actor = this.playerBattler();
+        if (!actor) return false;
+
+        if (this._attackCooldown == null) this._attackCooldown = 0;
+        if (this._attackCooldown > 0) return false;
+        if (this.isEnemyAttackBusy && this.isEnemyAttackBusy()) return false;
+
+        var action = this.selectEnemyActionByRating();
+        if (!action) return false;
+
+        var skillId = action.skillId;
+        var skill = $dataSkills[skillId];
+        if (!skill) return false;
+
+        var range = this.enemySkillRange ? this.enemySkillRange(skill) : 1;
+
+        if (range <= 1) {
+            var contact = stableMeleeContact(this, $gamePlayer);
+            if (!contact.ok) return false;
+
+            // If already touching, do not let a remaining DotMove fractional move
+            // block the attack. Stop movement and use the stable contact direction.
+            if (typeof this.cancelMove === "function") this.cancelMove();
+            setAttackDirection(this, contact.dir);
+            return this.useEnemySkillOnPlayer(skillId);
+        }
+
+        // Ranged skills keep the previous DotMove logic.
+        return _CF_Enemy_v3_attackPlayer.call(this);
+    };
+
+})();
