@@ -303,6 +303,100 @@
     }
 
 
+    function comboDashHasDotMove() {
+        return !!(
+            window.Game_CharacterBase &&
+            Game_CharacterBase.prototype &&
+            typeof Game_CharacterBase.prototype.centerRealX === "function" &&
+            typeof Game_CharacterBase.prototype.centerRealY === "function"
+        );
+    }
+
+    function comboDashDirectionOf(character) {
+        var dir = 0;
+        if (character && typeof character.cfInteractionDirection === "function") {
+            dir = Number(character.cfInteractionDirection() || 0);
+        }
+        if (!dir && character && typeof character.direction === "function") {
+            dir = Number(character.direction() || 0);
+        }
+        return [1, 2, 3, 4, 6, 7, 8, 9].indexOf(dir) >= 0 ? dir : 2;
+    }
+
+    function comboDashDirVector(direction) {
+        var diag = Math.SQRT1_2 || (1 / Math.sqrt(2));
+        switch (direction) {
+            case 1: return { x: -diag, y: diag };
+            case 2: return { x: 0, y: 1 };
+            case 3: return { x: diag, y: diag };
+            case 4: return { x: -1, y: 0 };
+            case 6: return { x: 1, y: 0 };
+            case 7: return { x: -diag, y: -diag };
+            case 8: return { x: 0, y: -1 };
+            case 9: return { x: diag, y: -diag };
+            default: return { x: 0, y: 0 };
+        }
+    }
+
+    function comboDashDirToHV(direction) {
+        switch (direction) {
+            case 1: return [4, 2];
+            case 3: return [6, 2];
+            case 7: return [4, 8];
+            case 9: return [6, 8];
+            default: return [0, 0];
+        }
+    }
+
+    function comboDashCharX(character) {
+        if (!character) return 0;
+        if (character._realX != null) return Number(character._realX || 0);
+        return Number(character.x || character._x || 0);
+    }
+
+    function comboDashCharY(character) {
+        if (!character) return 0;
+        if (character._realY != null) return Number(character._realY || 0);
+        return Number(character.y || character._y || 0);
+    }
+
+    function comboDashCharWidth(character) {
+        if (!character) return 1;
+        return typeof character.width === "function" ? Math.max(0.1, Number(character.width() || 1)) : 1;
+    }
+
+    function comboDashCharHeight(character) {
+        if (!character) return 1;
+        return typeof character.height === "function" ? Math.max(0.1, Number(character.height() || 1)) : 1;
+    }
+
+    function comboDashRectOverlap(ax, ay, aw, ah, bx, by, bw, bh) {
+        return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
+    }
+
+    function comboDashLiveEnemyEvents() {
+        if ($gameMap && typeof $gameMap.enemyTargetsForAttackObject === "function") {
+            return $gameMap.enemyTargetsForAttackObject();
+        }
+        return $gameMap && $gameMap.events ? $gameMap.events().filter(function(ev) {
+            return ev && ev._enemyEntity && ev._hp > 0;
+        }) : [];
+    }
+
+    function comboDashSetCharacterPosition(character, x, y) {
+        if (!character) return;
+        if (typeof character.locate === "function") {
+            character.locate(x, y);
+        } else if (typeof character.setPosition === "function") {
+            character.setPosition(x, y);
+        }
+    }
+
+    function comboDashRoundPosition(value) {
+        return Math.round(Number(value || 0) * 1000) / 1000;
+    }
+
+
     var _Game_Player_initMembers_CFSkillDash = Game_Player.prototype.initMembers;
     Game_Player.prototype.initMembers = function() {
         _Game_Player_initMembers_CFSkillDash.call(this);
@@ -368,11 +462,28 @@
             if ((this[countNames[k]] || 0) > 0) return true;
         }
 
+        if (this._pendingAttackObjects && this._pendingAttackObjects.length > 0) return true;
+        if (this._motionPlaying) return true;
+
+        if ($gameMap && typeof $gameMap.attackObjects === "function") {
+            var objects = $gameMap.attackObjects();
+            for (var m = 0; m < objects.length; m++) {
+                var obj = objects[m];
+                if (obj && !obj._finished && obj._user === this) return true;
+            }
+        }
+
         return false;
     };
 
     Game_Player.prototype.cfFinishComboDashSequence = function() {
         this.cfSetComboDashMoveLock(false);
+        if (this.unlockWeaponLayerHidden) {
+            this.unlockWeaponLayerHidden();
+        }
+        if (this.showWeaponLayerTemp) {
+            this.showWeaponLayerTemp();
+        }
         this._comboDashData = null;
     };
 
@@ -383,6 +494,16 @@
         }
         return _Game_Player_canMove_CFSkillDash.call(this);
     };
+
+    var _Game_Player_useMapSkill_CFSkillDash = Game_Player.prototype.useMapSkill;
+    if (_Game_Player_useMapSkill_CFSkillDash) {
+        Game_Player.prototype.useMapSkill = function(skillId, slotIndex) {
+            if (this._comboDashData) {
+                return false;
+            }
+            return _Game_Player_useMapSkill_CFSkillDash.call(this, skillId, slotIndex);
+        };
+    }
 
     var _Game_Player_queueAttackObject_CFSkillDash = Game_Player.prototype.queueAttackObject;
     Game_Player.prototype.queueAttackObject = function(skill, type) {
@@ -407,7 +528,7 @@
         this._comboDashData = {
             skill: skill,
             type: type,
-            direction: this.direction(),
+            direction: comboDashDirectionOf(this),
             step: comboDashStep(),
             moved: 0,
             delay: comboDashDelay(),
@@ -571,7 +692,7 @@
         var y = this.y;
 
         for (var i = 0; i < maxStep; i++) {
-            if (!this.canPass(x, y, direction)) break;
+            if (!this.cfComboDashCanPassFrom(x, y, direction)) break;
 
             if (direction === 2) y += 1;
             else if (direction === 4) x -= 1;
@@ -726,17 +847,120 @@
         }
     };
 
-    Game_Player.prototype.cfDashNextPos = function(x, y, direction) {
-        var nx = x;
-        var ny = y;
-        if (direction === 2) ny += 1;
-        else if (direction === 4) nx -= 1;
-        else if (direction === 6) nx += 1;
-        else if (direction === 8) ny -= 1;
-        return { x: nx, y: ny };
+    Game_Player.prototype.cfDashNextPos = function(x, y, direction, distance) {
+        var v = comboDashDirVector(direction);
+        var d = distance != null ? Number(distance || 0) : 1;
+        return {
+            x: comboDashRoundPosition(Number(x || 0) + v.x * d),
+            y: comboDashRoundPosition(Number(y || 0) + v.y * d)
+        };
+    };
+
+    Game_Player.prototype.cfComboDashCanPassFrom = function(x, y, direction, ignoreCharacters) {
+        var opt = ignoreCharacters ? { needCheckCharacters: false } : undefined;
+        if (direction === 1 || direction === 3 || direction === 7 || direction === 9) {
+            var hv = comboDashDirToHV(direction);
+            if (this.canPassDiagonally) {
+                return opt ? this.canPassDiagonally(x, y, hv[0], hv[1], opt) : this.canPassDiagonally(x, y, hv[0], hv[1]);
+            }
+            return this.canPass(x, y, hv[0]) && this.canPass(x, y, hv[1]);
+        }
+        return opt ? this.canPass(x, y, direction, opt) : this.canPass(x, y, direction);
+    };
+
+    Game_Player.prototype.cfComboDashEnemyAtRect = function(x, y) {
+        var pw = comboDashCharWidth(this);
+        var ph = comboDashCharHeight(this);
+        var enemies = comboDashLiveEnemyEvents();
+        for (var i = 0; i < enemies.length; i++) {
+            var ev = enemies[i];
+            if (!ev || ev._hp <= 0 || !ev._enemyEntity) continue;
+            if (comboDashRectOverlap(
+                x, y, pw, ph,
+                comboDashCharX(ev), comboDashCharY(ev),
+                comboDashCharWidth(ev), comboDashCharHeight(ev)
+            )) {
+                return ev;
+            }
+        }
+        return null;
+    };
+
+    Game_Player.prototype.cfComboDashPositionBlockedByOther = function(x, y, ignoreEvent) {
+        var pw = comboDashCharWidth(this);
+        var ph = comboDashCharHeight(this);
+        var enemies = comboDashLiveEnemyEvents();
+        for (var i = 0; i < enemies.length; i++) {
+            var ev = enemies[i];
+            if (!ev || ev === ignoreEvent || ev._hp <= 0 || !ev._enemyEntity) continue;
+            if (comboDashRectOverlap(
+                x, y, pw, ph,
+                comboDashCharX(ev), comboDashCharY(ev),
+                comboDashCharWidth(ev), comboDashCharHeight(ev)
+            )) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    Game_Player.prototype.cfScanDotDashForward = function(direction, maxStep) {
+        var result = {
+            reachableStep: 0,
+            hitEnemy: null,
+            hitStep: 0,
+            endX: comboDashCharX(this),
+            endY: comboDashCharY(this)
+        };
+
+        var stepUnit = 0.25;
+        var distance = 0;
+        var x = comboDashCharX(this);
+        var y = comboDashCharY(this);
+        var lastX = x;
+        var lastY = y;
+        var total = Math.max(0, Number(maxStep || 0));
+
+        while (distance < total) {
+            var nextDistance = Math.min(stepUnit, total - distance);
+            if (!this.cfComboDashCanPassFrom(x, y, direction, true)) break;
+
+            var pos = this.cfDashNextPos(x, y, direction, nextDistance);
+            var enemy = this.cfComboDashEnemyAtRect(pos.x, pos.y);
+
+            if (enemy) {
+                result.hitEnemy = enemy;
+                result.hitStep = Math.ceil(distance + nextDistance);
+
+                if (!this.cfComboDashPositionBlockedByOther(comboDashCharX(enemy), comboDashCharY(enemy), enemy)) {
+                    result.endX = comboDashCharX(enemy);
+                    result.endY = comboDashCharY(enemy);
+                } else {
+                    result.endX = lastX;
+                    result.endY = lastY;
+                }
+                result.reachableStep = Math.max(0, Math.ceil(distance));
+                return result;
+            }
+
+            lastX = pos.x;
+            lastY = pos.y;
+            x = pos.x;
+            y = pos.y;
+            distance += nextDistance;
+            result.endX = x;
+            result.endY = y;
+            result.reachableStep = Math.ceil(distance);
+        }
+
+        return result;
     };
 
     Game_Player.prototype.cfScanDashForward = function(direction, maxStep) {
+        if (comboDashHasDotMove()) {
+            return this.cfScanDotDashForward(direction, maxStep);
+        }
+
         var result = {
             reachableStep: 0,
             hitEnemy: null,
@@ -775,7 +999,7 @@
                 var playerFinalY = y;
 
                 for (var k = i + 1; k <= maxStep; k++) {
-                    if (!$gamePlayer.canPass(tx, ty, direction)) break;
+                    if (!$gamePlayer.cfComboDashCanPassFrom(tx, ty, direction)) break;
 
                     var nextPos = this.cfDashNextPos(tx, ty, direction);
                     var nextEvents = $gameMap.eventsXy(nextPos.x, nextPos.y);
@@ -797,7 +1021,7 @@
                 return result;
             }
 
-            if (!this.canPass(x, y, direction)) break;
+            if (!this.cfComboDashCanPassFrom(x, y, direction)) break;
 
             x = nx;
             y = ny;
@@ -809,31 +1033,90 @@
         return result;
     };
 
+    Game_Player.prototype.cfComboDashMapValidPosition = function(x, y) {
+        return $gameMap && $gameMap.isValid(Math.floor(Number(x || 0)), Math.floor(Number(y || 0)));
+    };
+
+    Game_Player.prototype.cfComboDashCharacterCanPassFrom = function(character, x, y, direction) {
+        if (!character || character.isThrough && character.isThrough()) return true;
+        var opt = { needCheckCharacters: false };
+        if (direction === 1 || direction === 3 || direction === 7 || direction === 9) {
+            var hv = comboDashDirToHV(direction);
+            if (typeof character.canPassDiagonally === "function") {
+                return character.canPassDiagonally(x, y, hv[0], hv[1], opt);
+            }
+            return character.canPass(x, y, hv[0], opt) && character.canPass(x, y, hv[1], opt);
+        }
+        if (typeof character.canPass === "function") {
+            return character.canPass(x, y, direction, opt);
+        }
+        return $gameMap.isPassable(Math.floor(x), Math.floor(y), direction);
+    };
+
+    Game_Player.prototype.cfComboDashEnemyPositionBlocked = function(enemyEvent, x, y) {
+        var ew = comboDashCharWidth(enemyEvent);
+        var eh = comboDashCharHeight(enemyEvent);
+        if (comboDashRectOverlap(
+            comboDashCharX(this), comboDashCharY(this),
+            comboDashCharWidth(this), comboDashCharHeight(this),
+            x, y, ew, eh
+        )) {
+            return true;
+        }
+
+        var enemies = comboDashLiveEnemyEvents();
+        for (var i = 0; i < enemies.length; i++) {
+            var ev = enemies[i];
+            if (!ev || ev === enemyEvent || ev._hp <= 0 || !ev._enemyEntity) continue;
+            if (comboDashRectOverlap(
+                x, y, ew, eh,
+                comboDashCharX(ev), comboDashCharY(ev),
+                comboDashCharWidth(ev), comboDashCharHeight(ev)
+            )) {
+                return true;
+            }
+        }
+
+        if (!comboDashHasDotMove()) {
+            var blockEvents = $gameMap.eventsXyNt(x, y).filter(function(ev) {
+                return ev !== enemyEvent;
+            });
+            return blockEvents.length > 0;
+        }
+
+        return false;
+    };
+
     Game_Player.prototype.cfFindEnemyPushOutTarget = function(enemyEvent, direction, dashEndX, dashEndY) {
         if (!enemyEvent) return null;
 
-        var x = dashEndX;
-        var y = dashEndY;
+        var x = Number(dashEndX != null ? dashEndX : comboDashCharX(enemyEvent));
+        var y = Number(dashEndY != null ? dashEndY : comboDashCharY(enemyEvent));
+        var pushStep = comboDashHasDotMove() ? 0.5 : 1;
 
-        for (var i = 0; i < 8; i++) {
-            var pos = this.cfDashNextPos(x, y, direction);
+        for (var i = 0; i < 16; i++) {
+            if (!this.cfComboDashCharacterCanPassFrom(enemyEvent, x, y, direction)) break;
+
+            var pos = this.cfDashNextPos(x, y, direction, pushStep);
             var nx = pos.x;
             var ny = pos.y;
 
-            if (!$gameMap.isValid(nx, ny)) break;
-            if (!enemyEvent.isThrough() && !enemyEvent.isMapPassable(x, y, direction)) break;
+            if (!this.cfComboDashMapValidPosition(nx, ny)) break;
 
-            var blockEvents = $gameMap.eventsXyNt(nx, ny).filter(function(ev) {
-                return ev !== enemyEvent;
-            });
-            if (blockEvents.length > 0) break;
+            if (comboDashRectOverlap(
+                dashEndX, dashEndY,
+                comboDashCharWidth(this), comboDashCharHeight(this),
+                nx, ny,
+                comboDashCharWidth(enemyEvent), comboDashCharHeight(enemyEvent)
+            )) {
+                x = nx;
+                y = ny;
+                continue;
+            }
 
-            if ($gamePlayer.x === nx && $gamePlayer.y === ny) break;
+            if (this.cfComboDashEnemyPositionBlocked(enemyEvent, nx, ny)) break;
 
-            x = nx;
-            y = ny;
-
-            return { x: x, y: y };
+            return { x: nx, y: ny };
         }
 
         return null;
@@ -853,13 +1136,13 @@
         var target = this.cfFindEnemyPushOutTarget(enemyEvent, direction, dashEndX, dashEndY);
         if (!target) return false;
 
-        var oldX = enemyEvent.x;
-        var oldY = enemyEvent.y;
+        var oldX = comboDashCharX(enemyEvent);
+        var oldY = comboDashCharY(enemyEvent);
 
         enemyEvent._cfComboDashOldMoveSpeed = enemyEvent.moveSpeed();
         enemyEvent.setMoveSpeed(5);
 
-        enemyEvent.locate(target.x, target.y);
+        comboDashSetCharacterPosition(enemyEvent, target.x, target.y);
         enemyEvent._realX = oldX;
         enemyEvent._realY = oldY;
 
@@ -867,15 +1150,15 @@
     };
 
     Game_Player.prototype.cfStartDashSlideTo = function(targetX, targetY, direction) {
-        var oldX = this.x;
-        var oldY = this.y;
+        var oldX = comboDashCharX(this);
+        var oldY = comboDashCharY(this);
 
         this.setDirection(direction);
 
         this._cfComboDashOldMoveSpeed = this.moveSpeed();
         this.setMoveSpeed(6);
 
-        this.locate(targetX, targetY);
+        comboDashSetCharacterPosition(this, targetX, targetY);
         this._realX = oldX;
         this._realY = oldY;
 
