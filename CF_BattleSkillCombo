@@ -1,0 +1,1050 @@
+/*:
+ * @target MZ
+ * @plugindesc [Skill Movement Extension] Dash forward when casting a skill, then attack through the original system
+ * @author CFpanda
+ * @url https://cfpanda.itch.io/
+ *
+ * @param ComboDashStep
+ * @text Dash Step
+ * @type number
+ * @min 0
+ * @default 1
+ * @desc How many tiles the player dashes forward. Used by all skills with <comboDash>.
+ *
+ * @param ComboDashDelay
+ * @text Dash Arrive Delay
+ * @type number
+ * @min 0
+ * @default 0
+ * @desc Frames to wait after arriving before generating the original attack object.
+ *
+ * @param ComboDashLockFrames
+ * @text Attack Lock Frames
+ * @type number
+ * @min 1
+ * @default 24
+ * @desc Minimum frames to keep the player locked after the attack object is generated.
+ *
+ * @param ComboDashDamageRate
+ * @text Damage Rate (%)
+ * @type number
+ * @min 0
+ * @default 100
+ * @desc Damage multiplier for the attack released after dash. 100 = normal, 50 = half damage.
+ *
+ * @param ComboDashStartSe
+ * @text Dash Start SE
+ * @type file
+ * @dir audio/se/
+ * @default
+ * @desc Sound effect played immediately when the dash starts. Leave blank to disable.
+ *
+ * @param ComboDashStartSeVolume
+ * @text Dash Start SE Volume
+ * @type number
+ * @min 0
+ * @max 100
+ * @default 80
+ *
+ * @param ComboDashStartSePitch
+ * @text Dash Start SE Pitch
+ * @type number
+ * @min 50
+ * @max 150
+ * @default 100
+ *
+ * @param ComboDashStartSePan
+ * @text Dash Start SE Pan
+ * @type number
+ * @min -100
+ * @max 100
+ * @default 0
+ *
+ * @param ComboDashArriveSe
+ * @text Dash Arrive SE
+ * @type file
+ * @dir audio/se/
+ * @default
+ * @desc Sound effect played after the dash arrives, before the original attack object is generated. Leave blank to disable.
+ *
+ * @param ComboDashArriveSeVolume
+ * @text Dash Arrive SE Volume
+ * @type number
+ * @min 0
+ * @max 100
+ * @default 80
+ *
+ * @param ComboDashArriveSePitch
+ * @text Dash Arrive SE Pitch
+ * @type number
+ * @min 50
+ * @max 150
+ * @default 100
+ *
+ * @param ComboDashArriveSePan
+ * @text Dash Arrive SE Pan
+ * @type number
+ * @min -100
+ * @max 100
+ * @default 0
+ *
+ * @help
+ * ============================================================================
+ * ■ Plugin Positioning: CF Battle System Skill Extension
+ * ============================================================================
+ * This plugin adds a "dash forward, then attack" effect to map skills.
+ *
+ * It is not a follow-up attack after a hit.
+ * Instead, the movement is built into the skill itself.
+ *
+ * In other words:
+ * Skill cast
+ *   ↓
+ * The player dashes forward
+ *   ↓
+ * The attack object is generated through the original system
+ *   ↓
+ * After the attack object hits, damage is resolved by the original system
+ *
+ * ============================================================================
+ * ■ Suitable Effects
+ * ============================================================================
+ * Suitable for:
+ * ✔ Barbaric charge + one slash
+ * ✔ Dash slash
+ * ✔ Close-range slash
+ * ✔ Melee skills with movement
+ *
+ * ============================================================================
+ * ■ Skill Note Tags
+ * ============================================================================
+ * <comboDash>
+ * Enables this dash skill extension.
+ *
+ * Other settings are plugin parameters, not skill notes:
+ * - Dash Step
+ * - Dash Arrive Delay
+ * - Attack Lock Frames
+ * - Damage Rate (%)
+ * - Dash Start SE
+ * - Dash Arrive SE
+ *
+ * ============================================================================
+ * ■ Rules
+ * ============================================================================
+ * 1. The skill is cast normally whether or not there is an enemy ahead.
+ * 2. If the path ahead is passable, the player dashes forward first.
+ * 3. If the path ahead is not passable, the player does not dash, but the skill
+ *    is still cast normally.
+ * 4. Damage can be scaled by the Damage Rate (%) plugin parameter.
+ * 5. This plugin does not change the attack object type.
+ *
+ * ============================================================================
+ * ■ Example
+ * ============================================================================
+ * Skill note:
+ * <attackObject:slash>
+ * <comboDash>
+ *
+ * Dash distance, delay, lock frames, damage rate, and sound effects are set in
+ * the Plugin Manager parameters.
+ *
+ * ============================================================================
+ * ■ CF-BattleSystem Core Plugins
+ * ============================================================================
+ *  Required Plugin Load Order:
+ *
+ *  1. Enemy Entity Plugin                   CF_Enemy.js
+ *  2. Enemy Loot Processing Plugin          CF_EnemyLoot.js
+ *  3. Enemy Sight / Aggro / Attack Setup    CF_Eventsight.js
+ *  4. Attack Hit/Animation Handler          CF_Attack.js
+ *  5. Player Weapon Motion Plugin           CF_PlayerActionMotion.js
+ *  6. Skill Casting & Weapon Link Plugin    CF_PlayerSkillCast.js
+ *  7. Player backstep dodge action          CF_BackStep.js
+ *  8. Skill Hotbar UI Plugin                CF_BattleSkill_UI.js
+ *  9. Equipment System Graphical display    CF_Equipment.js
+ * 10. adjusting player/event X,Y            CF_SetPosition.js
+ * 11. Item pickup log (icon + colors name)  CF_LootlogScroll.js
+ * 12. Item hotbar helper plugin             CF_MapToolBarArpg.js
+ * 13. Animated Map Status Portrait Display  CF_MapFaceEmotion.js
+ * 14. Map UI HP/MP/TP Display Plugin        CF_HMTBarsBreezeShine
+ *
+ *  Optional support plugins (not bound to the battle system):
+ *  Bow Arrow Dependency Extension               CF_BowAmmoSystem.js
+ *  Skill Expansion Plugin                       CF_BattleSkillCombo.js
+ *  Combo counter display extension              CF_BattleComboSystem.js
+ *  Skill UI Expansion Plugin                    CF_BattleSkill_UI_Patch.js
+ *  Controls repeated casting segments           CF_BattleSkillRepeatAttack.js
+ *  Basic Diagonal Movement                      CF_EightDir.js
+ *  Enemy Hurt Sound Effect                      CF_EnemyHurtSE.js
+ *  Event Character Sound Effect                 CF_EventCharSE.js
+ *  Right-Side Event Face Display                CF_EventFaceRight.js
+ *  Controls event movement                      CF_EventAreaMovement.js
+ *  Save Event Location After Leaving the Map    CF_EventLocation_Save.js
+ *  Simple GoldHud                               CF_GoldHud.js
+ *  Adjusts window position size and menu order  CF_MenuScreen.js
+ *
+ *  Additional skill expansion plugins can be added to create different types of skills.
+ *
+ * ============================================================================
+ * ■ Copyright and License
+ * ============================================================================
+ * 1. The copyright of this plugin belongs to CFpanda. All rights reserved.
+ * 2. Free plugins may be used, modified, and distributed without restriction,
+ *    as long as the original author credit is retained.
+ * 3. Paid plugins require a valid purchase from the release page for commercial use.
+ * 4. A valid license or purchase only grants the right to use the plugin
+ *    within the licensed scope; it does not transfer copyright ownership.
+ * 5. Latest instructions and release page:
+ *    https://cfpanda.itch.io/
+ * ============================================================================
+ */
+
+(function() {
+
+    var PLUGIN_NAME = "CF_BattleSkillCombo";
+    var parameters = PluginManager.parameters(PLUGIN_NAME);
+
+    function readParamText(name, defaultValue) {
+        return String(parameters[name] != null ? parameters[name] : defaultValue || "").trim();
+    }
+
+    function readParamNumber(name, defaultValue) {
+        var value = Number(parameters[name]);
+        return isNaN(value) ? defaultValue : value;
+    }
+
+    function makeParamSe(nameParam, volumeParam, pitchParam, panParam) {
+        var name = readParamText(nameParam, "");
+        if (!name) return null;
+
+        return {
+            name: name,
+            volume: readParamNumber(volumeParam, 80),
+            pitch: readParamNumber(pitchParam, 100),
+            pan: readParamNumber(panParam, 0)
+        };
+    }
+
+    function comboDashStartSe() {
+        return makeParamSe(
+            "ComboDashStartSe",
+            "ComboDashStartSeVolume",
+            "ComboDashStartSePitch",
+            "ComboDashStartSePan"
+        );
+    }
+
+    function comboDashArriveSe() {
+        return makeParamSe(
+            "ComboDashArriveSe",
+            "ComboDashArriveSeVolume",
+            "ComboDashArriveSePitch",
+            "ComboDashArriveSePan"
+        );
+    }
+
+    function skillHasComboDash(skill) {
+        if (!skill) return false;
+        var note = skill.note || "";
+        return /<comboDash>/i.test(note);
+    }
+
+    function readParamInteger(name, defaultValue, minValue) {
+        var value = Math.floor(readParamNumber(name, defaultValue));
+        if (isNaN(value)) value = defaultValue;
+        if (minValue != null) value = Math.max(minValue, value);
+        return value;
+    }
+
+    function comboDashStep() {
+        return readParamInteger("ComboDashStep", 1, 0);
+    }
+
+    function comboDashDelay() {
+        return readParamInteger("ComboDashDelay", 0, 0);
+    }
+
+    function comboDashLockFrames() {
+        return readParamInteger("ComboDashLockFrames", 24, 1);
+    }
+
+    function comboDashDamageRate() {
+        return readParamInteger("ComboDashDamageRate", 100, 0);
+    }
+
+    function makeComboDashSkill(skill, damageRate) {
+        if (!skill || damageRate === 100) return skill;
+
+        var copy = Object.assign({}, skill);
+        copy.damage = Object.assign({}, skill.damage || {});
+
+        if (copy.damage && copy.damage.type > 0) {
+            var formula = String(copy.damage.formula || "0");
+            copy.damage.formula = "Math.floor((" + formula + ") * " + damageRate + " / 100)";
+        }
+
+        copy._cfComboDashOriginalSkill = skill;
+        copy._cfComboDashDamageRate = damageRate;
+        return copy;
+    }
+
+    function playComboDashSe(se) {
+        if (!se || !se.name) return false;
+        if (!AudioManager || !AudioManager.playSe) return false;
+
+        AudioManager.playSe({
+            name: se.name,
+            volume: Number(se.volume || 90),
+            pitch: Number(se.pitch || 100),
+            pan: Number(se.pan || 0)
+        });
+        return true;
+    }
+
+
+    var _Game_Player_initMembers_CFSkillDash = Game_Player.prototype.initMembers;
+    Game_Player.prototype.initMembers = function() {
+        _Game_Player_initMembers_CFSkillDash.call(this);
+        this._comboDashData = null;
+        this._comboDashMoveLock = false;
+    };
+
+    Game_Player.prototype.cfSetComboDashMoveLock = function(locked) {
+        this._comboDashMoveLock = !!locked;
+        if (locked && $gameTemp && $gameTemp.clearDestination) {
+            $gameTemp.clearDestination();
+        }
+    };
+
+    Game_Player.prototype.cfIsComboDashMoveLocked = function() {
+        return !!this._comboDashMoveLock;
+    };
+
+    Game_Player.prototype.cfIsComboDashAttackBusy = function() {
+        var fnNames = [
+            "isAttackMotionPlaying",
+            "isWeaponMotionPlaying",
+            "isSkillMotionPlaying",
+            "isPlayerAttackBusy",
+            "isAttackBusy",
+            "isSkillCastBusy",
+            "isPlayerActionBusy"
+        ];
+        for (var i = 0; i < fnNames.length; i++) {
+            var fn = this[fnNames[i]];
+            if (typeof fn === "function") {
+                try {
+                    if (fn.call(this)) return true;
+                } catch (e) {
+                }
+            }
+        }
+
+        var propNames = [
+            "_weaponMotionPlaying",
+            "_cfWeaponMotionPlaying",
+            "_skillMotionPlaying",
+            "_attackMotionPlaying",
+            "_playerActionBusy",
+            "_cfPlayerActionBusy",
+            "_isAttacking",
+            "_isAttackPlaying",
+            "_isSkillCasting"
+        ];
+        for (var j = 0; j < propNames.length; j++) {
+            if (this[propNames[j]]) return true;
+        }
+
+        var countNames = [
+            "_attackWaitCount",
+            "_skillWaitCount",
+            "_motionWait",
+            "_castWait",
+            "_rigidCount",
+            "_actionWaitCount"
+        ];
+        for (var k = 0; k < countNames.length; k++) {
+            if ((this[countNames[k]] || 0) > 0) return true;
+        }
+
+        return false;
+    };
+
+    Game_Player.prototype.cfFinishComboDashSequence = function() {
+        this.cfSetComboDashMoveLock(false);
+        this._comboDashData = null;
+    };
+
+    var _Game_Player_canMove_CFSkillDash = Game_Player.prototype.canMove;
+    Game_Player.prototype.canMove = function() {
+        if (this.cfIsComboDashMoveLocked && this.cfIsComboDashMoveLocked()) {
+            return false;
+        }
+        return _Game_Player_canMove_CFSkillDash.call(this);
+    };
+
+    var _Game_Player_queueAttackObject_CFSkillDash = Game_Player.prototype.queueAttackObject;
+    Game_Player.prototype.queueAttackObject = function(skill, type) {
+        if (!skill || !type) {
+            return _Game_Player_queueAttackObject_CFSkillDash.call(this, skill, type);
+        }
+
+        if (this._comboDashForceSpawn) {
+            return _Game_Player_queueAttackObject_CFSkillDash.call(this, skill, type);
+        }
+
+        if (!skillHasComboDash(skill)) {
+            return _Game_Player_queueAttackObject_CFSkillDash.call(this, skill, type);
+        }
+
+        if (this._comboDashData) {
+            return false;
+        }
+
+        this.cfSetComboDashMoveLock(true);
+
+        this._comboDashData = {
+            skill: skill,
+            type: type,
+            direction: this.direction(),
+            step: comboDashStep(),
+            moved: 0,
+            delay: comboDashDelay(),
+            phase: 0,
+            wait: 0,
+            attackLockWait: comboDashLockFrames(),
+            idleCount: 0,
+            startSe: comboDashStartSe(),
+            arriveSe: comboDashArriveSe(),
+            damageRate: comboDashDamageRate(),
+            _startSePlayed: false,
+            _arriveSePlayed: false,
+            _hiddenApplied: false,
+            _needHiddenLock: skillHasHiddenTag(skill)
+        };
+
+        playComboDashSe(this._comboDashData.startSe);
+        this._comboDashData._startSePlayed = true;
+
+        return true;
+    };
+
+    var _Game_Player_update_CFSkillDash = Game_Player.prototype.update;
+    Game_Player.prototype.update = function(sceneActive) {
+        _Game_Player_update_CFSkillDash.call(this, sceneActive);
+        this.updateComboDashProcess();
+    };
+
+    Game_Player.prototype.updateComboDashProcess = function() {
+        var data = this._comboDashData;
+        if (!data) return;
+
+        if (this.isMoving && this.isMoving()) {
+            return;
+        }
+
+        if (data.phase === 0) {
+            this.setDirection(data.direction);
+
+            if (!data._hiddenApplied) {
+                if (data._needHiddenLock) {
+                    if (this.hideWeaponLayerTemp) {
+                        this.hideWeaponLayerTemp();
+                    }
+                    if (this.lockWeaponLayerHidden) {
+                        this.lockWeaponLayerHidden();
+                    }
+                }
+                data._hiddenApplied = true;
+            }
+
+            var scan = this.cfScanDashForward(data.direction, data.step);
+            data.scan = scan;
+
+            if (scan.hitEnemy) {
+                var enemy = scan.hitEnemy;
+
+                this.cfPushEnemyToDashOutside(
+                enemy,
+                data.direction,
+                scan.endX,
+                scan.endY
+                );
+
+                this.cfStartDashSlideTo(scan.endX, scan.endY, data.direction);
+
+                data.phase = 1;
+                data.wait = data.delay;
+                return;
+            }
+
+            if (scan.reachableStep > 0) {
+                this.cfStartDashSlideTo(scan.endX, scan.endY, data.direction);
+            }
+
+            data.phase = 1;
+            data.wait = data.delay;
+            return;
+        }
+
+        if (data.phase === 1) {
+            this.cfEndDashSlide();
+
+            if (!data._arriveSePlayed) {
+                playComboDashSe(data.arriveSe);
+                data._arriveSePlayed = true;
+            }
+
+            if (data.scan && data.scan.hitEnemy) {
+                this.cfRestorePushedEnemySpeed(data.scan.hitEnemy);
+            }
+
+            if (data.wait > 0) {
+                data.wait--;
+                return;
+            }
+
+            data.phase = 2;
+            return;
+        }
+
+        if (data.phase === 2) {
+            var skill = makeComboDashSkill(data.skill, data.damageRate);
+            var type = data.type;
+
+            this.setDirection(data.direction);
+
+            this._comboDashForceSpawn = true;
+            _Game_Player_queueAttackObject_CFSkillDash.call(this, skill, type);
+            this._comboDashForceSpawn = false;
+
+            data.phase = 3;
+            data.idleCount = 0;
+            return;
+        }
+
+        if (data.phase === 3) {
+            if ($gameTemp && $gameTemp.clearDestination) {
+                $gameTemp.clearDestination();
+            }
+
+            if (this.cfIsComboDashAttackBusy && this.cfIsComboDashAttackBusy()) {
+                data.idleCount = 0;
+                if (data.attackLockWait > 0) {
+                    data.attackLockWait--;
+                }
+                return;
+            }
+
+            if (data.attackLockWait > 0) {
+                data.attackLockWait--;
+                return;
+            }
+
+            data.idleCount++;
+            if (data.idleCount < 2) {
+                return;
+            }
+
+            this.cfFinishComboDashSequence();
+            return;
+        }
+    };
+
+    Game_Player.prototype.cfCancelComboDash = function() {
+        if (this.cfEndDashSlide) {
+            this.cfEndDashSlide();
+        }
+        if (this.unlockWeaponLayerHidden) {
+            this.unlockWeaponLayerHidden();
+        }
+        if (this.showWeaponLayerTemp) {
+            this.showWeaponLayerTemp();
+        }
+        this.cfFinishComboDashSequence();
+    };
+
+    Game_Player.prototype.cfComboDashReachableStep = function(direction, maxStep) {
+        var step = 0;
+        var x = this.x;
+        var y = this.y;
+
+        for (var i = 0; i < maxStep; i++) {
+            if (!this.canPass(x, y, direction)) break;
+
+            if (direction === 2) y += 1;
+            else if (direction === 4) x -= 1;
+            else if (direction === 6) x += 1;
+            else if (direction === 8) y -= 1;
+
+            step++;
+        }
+
+        return step;
+    };
+
+    Game_Player.prototype.cfStartComboDash = function(direction, step) {
+        if (step <= 0) return false;
+
+        var oldX = this.x;
+        var oldY = this.y;
+        var tx = oldX;
+        var ty = oldY;
+
+        if (direction === 2) ty += step;
+        else if (direction === 4) tx -= step;
+        else if (direction === 6) tx += step;
+        else if (direction === 8) ty -= step;
+
+        this.setDirection(direction);
+
+        this._cfComboDashOldMoveSpeed = this.moveSpeed();
+        this.setMoveSpeed(5); // Charge speed. Change to 7 for a stronger impact.
+
+        this.locate(tx, ty);
+        this._realX = oldX;
+        this._realY = oldY;
+
+        return true;
+    };
+
+    Game_Player.prototype.cfEndComboDash = function() {
+        if (this._cfComboDashOldMoveSpeed != null) {
+            this.setMoveSpeed(this._cfComboDashOldMoveSpeed);
+            this._cfComboDashOldMoveSpeed = null;
+        }
+    };
+
+    Game_Player.prototype.cfScanDashPath = function(direction, maxStep) {
+        var result = {
+            reachableStep: 0,
+            hitEnemy: null,
+            hitStep: 0
+        };
+
+        var x = this.x;
+        var y = this.y;
+
+        for (var i = 1; i <= maxStep; i++) {
+            if (!this.canPass(x, y, direction)) {
+                break;
+            }
+
+            if (direction === 2) y += 1;
+            else if (direction === 4) x -= 1;
+            else if (direction === 6) x += 1;
+            else if (direction === 8) y -= 1;
+
+            result.reachableStep = i;
+
+            var events = $gameMap.eventsXy(x, y);
+            for (var j = 0; j < events.length; j++) {
+                var ev = events[j];
+                if (ev && ev._enemyEntity && ev._hp > 0) {
+                    result.hitEnemy = ev;
+                    result.hitStep = i;
+                    return result;
+                }
+            }
+        }
+
+        return result;
+    };
+
+    Game_Player.prototype.cfPushEnemyBeyondDashEnd = function(enemyEvent, direction, dashEndStep) {
+        if (!enemyEvent) return 0;
+
+        var moved = 0;
+        var ex = enemyEvent.x;
+        var ey = enemyEvent.y;
+
+        for (var i = 0; i < 6; i++) {
+            var nx = ex;
+            var ny = ey;
+
+            if (direction === 2) ny += 1;
+            else if (direction === 4) nx -= 1;
+            else if (direction === 6) nx += 1;
+            else if (direction === 8) ny -= 1;
+
+            if (!$gameMap.isValid(nx, ny)) break;
+            if (!enemyEvent.isThrough() && !enemyEvent.isMapPassable(ex, ey, direction)) break;
+
+            var blockEvents = $gameMap.eventsXyNt(nx, ny).filter(function(ev) {
+                return ev !== enemyEvent;
+            });
+            if (blockEvents.length > 0) break;
+
+            if ($gamePlayer.x === nx && $gamePlayer.y === ny) break;
+
+            enemyEvent.locate(nx, ny);
+            ex = nx;
+            ey = ny;
+            moved++;
+
+            var dx = Math.abs(ex - this.x);
+            var dy = Math.abs(ey - this.y);
+            var dist = dx + dy;
+            if (dist > dashEndStep) {
+                break;
+            }
+        }
+
+        return moved;
+    };
+
+    Game_Player.prototype.cfStartComboDashToStep = function(direction, step) {
+        if (step <= 0) return false;
+
+        var oldX = this.x;
+        var oldY = this.y;
+        var tx = oldX;
+        var ty = oldY;
+
+        if (direction === 2) ty += step;
+        else if (direction === 4) tx -= step;
+        else if (direction === 6) tx += step;
+        else if (direction === 8) ty -= step;
+
+        this.setDirection(direction);
+
+        this._cfComboDashOldMoveSpeed = this.moveSpeed();
+        this.setMoveSpeed(6);
+
+        this.locate(tx, ty);
+        this._realX = oldX;
+        this._realY = oldY;
+
+        return true;
+    };
+
+    Game_Player.prototype.cfEndComboDash = function() {
+        if (this._cfComboDashOldMoveSpeed != null) {
+            this.setMoveSpeed(this._cfComboDashOldMoveSpeed);
+            this._cfComboDashOldMoveSpeed = null;
+        }
+    };
+
+    Game_Player.prototype.cfDashNextPos = function(x, y, direction) {
+        var nx = x;
+        var ny = y;
+        if (direction === 2) ny += 1;
+        else if (direction === 4) nx -= 1;
+        else if (direction === 6) nx += 1;
+        else if (direction === 8) ny -= 1;
+        return { x: nx, y: ny };
+    };
+
+    Game_Player.prototype.cfScanDashForward = function(direction, maxStep) {
+        var result = {
+            reachableStep: 0,
+            hitEnemy: null,
+            hitStep: 0,
+            endX: this.x,
+            endY: this.y
+        };
+
+        var x = this.x;
+        var y = this.y;
+
+        for (var i = 1; i <= maxStep; i++) {
+            var pos = this.cfDashNextPos(x, y, direction);
+            var nx = pos.x;
+            var ny = pos.y;
+
+            if (!$gameMap.isValid(nx, ny)) break;
+
+            var events = $gameMap.eventsXy(nx, ny);
+            var foundEnemy = null;
+            for (var j = 0; j < events.length; j++) {
+                var ev = events[j];
+                if (ev && ev._enemyEntity && ev._hp > 0) {
+                    foundEnemy = ev;
+                    break;
+                }
+            }
+
+            if (foundEnemy) {
+                result.hitEnemy = foundEnemy;
+                result.hitStep = i;
+
+                var tx = nx;
+                var ty = ny;
+                var playerFinalX = x; // By default, the player stops one tile before the enemy.
+                var playerFinalY = y;
+
+                for (var k = i + 1; k <= maxStep; k++) {
+                    if (!$gamePlayer.canPass(tx, ty, direction)) break;
+
+                    var nextPos = this.cfDashNextPos(tx, ty, direction);
+                    var nextEvents = $gameMap.eventsXy(nextPos.x, nextPos.y);
+                    var isBlockedByOther = nextEvents.some(function(e) {
+                        return e && e._enemyEntity && e._hp > 0 && e !== result.hitEnemy;
+                    });
+
+                    if (isBlockedByOther) break;
+
+                    playerFinalX = tx;
+                    playerFinalY = ty;
+                    tx = nextPos.x;
+                    ty = nextPos.y;
+                }
+
+                result.endX = playerFinalX;
+                result.endY = playerFinalY;
+                result.reachableStep = i;
+                return result;
+            }
+
+            if (!this.canPass(x, y, direction)) break;
+
+            x = nx;
+            y = ny;
+            result.endX = x;
+            result.endY = y;
+            result.reachableStep = i;
+        }
+
+        return result;
+    };
+
+    Game_Player.prototype.cfFindEnemyPushOutTarget = function(enemyEvent, direction, dashEndX, dashEndY) {
+        if (!enemyEvent) return null;
+
+        var x = dashEndX;
+        var y = dashEndY;
+
+        for (var i = 0; i < 8; i++) {
+            var pos = this.cfDashNextPos(x, y, direction);
+            var nx = pos.x;
+            var ny = pos.y;
+
+            if (!$gameMap.isValid(nx, ny)) break;
+            if (!enemyEvent.isThrough() && !enemyEvent.isMapPassable(x, y, direction)) break;
+
+            var blockEvents = $gameMap.eventsXyNt(nx, ny).filter(function(ev) {
+                return ev !== enemyEvent;
+            });
+            if (blockEvents.length > 0) break;
+
+            if ($gamePlayer.x === nx && $gamePlayer.y === ny) break;
+
+            x = nx;
+            y = ny;
+
+            return { x: x, y: y };
+        }
+
+        return null;
+    };
+
+    Game_Player.prototype.cfRestorePushedEnemySpeed = function(enemyEvent) {
+        if (!enemyEvent) return;
+        if (enemyEvent._cfComboDashOldMoveSpeed != null) {
+            enemyEvent.setMoveSpeed(enemyEvent._cfComboDashOldMoveSpeed);
+            enemyEvent._cfComboDashOldMoveSpeed = null;
+        }
+    };
+
+    Game_Player.prototype.cfPushEnemyToDashOutside = function(enemyEvent, direction, dashEndX, dashEndY) {
+        if (!enemyEvent) return false;
+
+        var target = this.cfFindEnemyPushOutTarget(enemyEvent, direction, dashEndX, dashEndY);
+        if (!target) return false;
+
+        var oldX = enemyEvent.x;
+        var oldY = enemyEvent.y;
+
+        enemyEvent._cfComboDashOldMoveSpeed = enemyEvent.moveSpeed();
+        enemyEvent.setMoveSpeed(5);
+
+        enemyEvent.locate(target.x, target.y);
+        enemyEvent._realX = oldX;
+        enemyEvent._realY = oldY;
+
+        return true;
+    };
+
+    Game_Player.prototype.cfStartDashSlideTo = function(targetX, targetY, direction) {
+        var oldX = this.x;
+        var oldY = this.y;
+
+        this.setDirection(direction);
+
+        this._cfComboDashOldMoveSpeed = this.moveSpeed();
+        this.setMoveSpeed(6);
+
+        this.locate(targetX, targetY);
+        this._realX = oldX;
+        this._realY = oldY;
+
+        return true;
+    };
+
+    Game_Player.prototype.cfEndDashSlide = function() {
+        if (this._cfComboDashOldMoveSpeed != null) {
+            this.setMoveSpeed(this._cfComboDashOldMoveSpeed);
+            this._cfComboDashOldMoveSpeed = null;
+        }
+    };
+
+    function skillHasHiddenTag(skill) {
+        if (!skill) return false;
+        var note = skill.note || "";
+        return /<Hidden>/i.test(note);
+    }
+
+    //--------------------------------------------------------------------------
+    // Skill character ghost effect, including current equipment / weapon layers.
+    //--------------------------------------------------------------------------
+
+    var _Game_Player_update_GhostEffect = Game_Player.prototype.update;
+    Game_Player.prototype.update = function(sceneActive) {
+        _Game_Player_update_GhostEffect.call(this, sceneActive);
+
+        if (this._comboDashData && this.isMoving()) {
+            if (!this._lastGhostFrame) this._lastGhostFrame = 0;
+
+            // Generate once every 2 frames.
+            if (Graphics.frameCount - this._lastGhostFrame >= 2) {
+                this._lastGhostFrame = Graphics.frameCount;
+                this.createComboDashGhost();
+            }
+        } else {
+            this._lastGhostFrame = 0;
+        }
+    };
+
+    Game_Player.prototype.createComboDashGhost = function() {
+        var scene = SceneManager._scene;
+        if (!scene || !scene._spriteset) return;
+
+        var spriteset = scene._spriteset;
+        var tilemap = spriteset._tilemap;
+        if (!tilemap) return;
+
+        var playerSprite = null;
+        var charSprites = spriteset._characterSprites || [];
+        for (var i = 0; i < charSprites.length; i++) {
+            if (charSprites[i] && charSprites[i]._character === this) {
+                playerSprite = charSprites[i];
+                break;
+            }
+        }
+        if (!playerSprite || !playerSprite.bitmap || !playerSprite.bitmap.isReady()) return;
+
+        var ghostRoot = new Sprite();
+        ghostRoot.x = playerSprite.x;
+        ghostRoot.y = playerSprite.y;
+        ghostRoot.z = (playerSprite.z || 3) - 1;
+        ghostRoot._isGhostRoot = true;
+
+        //--------------------------------------------------------------------------
+        // Clone the current display state of a sprite.
+        //--------------------------------------------------------------------------
+        function cloneCurrentSpriteFrame(sourceSprite, parentX, parentY) {
+            if (!sourceSprite || !sourceSprite.bitmap || !sourceSprite.bitmap.isReady()) return null;
+
+            var s = new Sprite();
+            s.bitmap = sourceSprite.bitmap;
+            s.anchor.x = sourceSprite.anchor ? sourceSprite.anchor.x : 0;
+            s.anchor.y = sourceSprite.anchor ? sourceSprite.anchor.y : 0;
+
+            if (sourceSprite._frame) {
+                s.setFrame(
+                sourceSprite._frame.x || 0,
+                sourceSprite._frame.y || 0,
+                sourceSprite._frame.width || 0,
+                sourceSprite._frame.height || 0
+                );
+            }
+
+            s.x = (sourceSprite.x || 0) - (parentX || 0);
+            s.y = (sourceSprite.y || 0) - (parentY || 0);
+            s.opacity = sourceSprite.opacity != null ? sourceSprite.opacity : 255;
+            s.scale.x = sourceSprite.scale ? sourceSprite.scale.x : 1;
+            s.scale.y = sourceSprite.scale ? sourceSprite.scale.y : 1;
+            s.rotation = sourceSprite.rotation || 0;
+            s.blendMode = 0;
+            s.visible = sourceSprite.visible !== false;
+            s.z = sourceSprite.z || 0;
+            return s;
+        }
+
+        //--------------------------------------------------------------------------
+        // 1. Player body.
+        //--------------------------------------------------------------------------
+        var bodyGhost = cloneCurrentSpriteFrame(playerSprite, playerSprite.x, playerSprite.y);
+        if (bodyGhost) {
+            bodyGhost.x = 0;
+            bodyGhost.y = 0;
+            bodyGhost.z = 0;
+            ghostRoot.addChild(bodyGhost);
+        }
+
+        //--------------------------------------------------------------------------
+        // 2. Equipment layer, such as clothes, cloaks, head accessories, etc.
+        // _visualEquipContainer inside playerSprite.
+        //--------------------------------------------------------------------------
+        if (playerSprite._visualEquipContainer) {
+            var equipChildren = playerSprite._visualEquipContainer.children || [];
+            for (var j = 0; j < equipChildren.length; j++) {
+                var equipSprite = equipChildren[j];
+                var equipGhost = cloneCurrentSpriteFrame(equipSprite, 0, 0);
+                if (equipGhost) {
+                    equipGhost.z = equipSprite.z || 0;
+                    ghostRoot.addChild(equipGhost);
+                }
+            }
+        }
+
+        //--------------------------------------------------------------------------
+        // 3. Front weapon layer attached inside playerSprite.
+        //--------------------------------------------------------------------------
+        if (spriteset._cfWeaponFrontSprite && spriteset._cfWeaponFrontSprite.visible) {
+            var frontGhost = cloneCurrentSpriteFrame(spriteset._cfWeaponFrontSprite, 0, 0);
+            if (frontGhost) {
+                frontGhost.z = 999;
+                ghostRoot.addChild(frontGhost);
+            }
+        }
+
+        //--------------------------------------------------------------------------
+        // 4. Back weapon layer attached to the tilemap.
+        // Convert it to coordinates relative to ghostRoot.
+        //--------------------------------------------------------------------------
+        if (spriteset._cfWeaponBackSprite && spriteset._cfWeaponBackSprite.visible) {
+            var backGhost = cloneCurrentSpriteFrame(
+            spriteset._cfWeaponBackSprite,
+            playerSprite.x,
+            playerSprite.y
+            );
+            if (backGhost) {
+                backGhost.z = -1;
+                ghostRoot.addChild(backGhost);
+            }
+        }
+
+        ghostRoot.children.sort(function(a, b) {
+            return (a.z || 0) - (b.z || 0);
+        });
+
+        ghostRoot.opacity = 150;
+        tilemap.addChild(ghostRoot);
+
+        ghostRoot.update = function() {
+            this.opacity -= 3;
+
+            for (var i = 0; i < this.children.length; i++) {
+                this.children[i].opacity = this.opacity;
+            }
+
+            if (this.opacity <= 0) {
+                if (this.parent) this.parent.removeChild(this);
+                this.destroy();
+            }
+        };
+    };
+
+})();
